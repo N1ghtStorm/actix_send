@@ -24,7 +24,8 @@ dependencies = [
 [[package]]
 name = "async-channel"
 version = "1.1.0"
-source = "git+https://github.com/stjepang/async-channel#41cb5401029b2c91365b1d30335dcd33740775e1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7614adedf629e714fda371a0b19f79a85a65182d5f7676e50c9eb7939f0a17a3"
 dependencies = [
  "concurrent-queue",
  "event-listener",

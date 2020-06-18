@@ -22,8 +22,8 @@ tokio-runtime = ["tokio/rt-threaded", "tokio/sync"]
 async-std-runtime = ["async-std", "tokio/sync"]
 
 [dependencies]
-actix_send_macros = { path = "actix-send-macros" }
-async-channel = { git = "https://github.com/stjepang/async-channel" }
+actix_send_macros = { path = "./actix-send-macros" }
+async-channel = "1.1.0"
 async-trait = "0.1.35"
 futures-channel = { version = "0.3.5" }
 
