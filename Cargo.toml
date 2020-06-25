@@ -12,9 +12,13 @@ members = [
     "actix-send-macros",
 ]
 
+#[[example]]
+#name = "basic"
+#path = "examples/basic.rs"
+#
 [[example]]
-name = "basic"
-path = "examples/basic.rs"
+name = "multi_msgs"
+path = "examples/multi_msgs.rs"
 
 [features]
 default = ["tokio-runtime"]

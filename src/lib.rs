@@ -8,7 +8,6 @@
 //! # Example:
 //! ```rust
 //! use actix_send::prelude::*;
-//! use async_trait::async_trait;
 //!
 //! // construct a new actor.
 //! #[actor]
@@ -30,9 +29,7 @@
 //! struct MyResult(u32);
 //!
 //! // impl MyMessage handler for MyActor
-//! // handler attribute must be placed above async_trait.
 //! #[handler]
-//! #[async_trait]
 //! impl Handler for MyActor {
 //!     // The msg and handle's return type must match former message macro's result type.
 //!     async fn handle(&mut self, msg: MyMessage) -> Option<MyResult> {
@@ -57,14 +54,14 @@
 //!     let address = actor.build().start();
 //!
 //!     // use address to send message to actor and await on result.
-//!     let result = address
+//!     let result: Result<Option<MyResult>, ActixSendError> = address
 //!         .send(MyMessage {
 //!             from: "actix-send".to_string(),
 //!             content: "a simple test".to_string(),
 //!        })
 //!         .await;
 //!
-//!    println!("We got result for message: {:?}", result);
+//!     println!("We got result for message: {:?}", result);
 //! }
 //! ```
 //! # Features
@@ -78,63 +75,9 @@ pub(crate) mod actors;
 pub(crate) mod util;
 
 pub mod prelude {
-    pub use crate::actors::{Actor, Handler, Message};
+    pub use crate::actors::{ActixSendError, Actor, Handler, Message};
     pub use actix_send_macros::*;
-}
-
-#[cfg(feature = "tokio-runtime")]
-#[cfg(not(feature = "async-std-runtime"))]
-mod test_actor {
-    use super::prelude::*;
-    use async_trait::async_trait;
-
-    #[actor]
-    struct MyActor {
-        state1: String,
-        state2: String,
-    }
-
-    #[message(result = "Option<MyResult>")]
-    struct MyMessage {
-        from: String,
-        content: String,
-    }
-
-    #[derive(Debug)]
-    struct MyResult;
-
-    #[handler]
-    #[async_trait]
-    impl Handler for MyActor {
-        // The msg and handle's return type must match former message macro's result type.
-        async fn handle(&mut self, msg: MyMessage) -> Option<MyResult> {
-            assert_eq!("actix-send", msg.from.as_str());
-            assert_eq!("a simple test", msg.content.as_str());
-
-            assert_eq!("state1", self.state1.as_str());
-            assert_eq!("state2", self.state2.as_str());
-
-            Some(MyResult)
-        }
-    }
-
-    #[tokio::test]
-    async fn run() {
-        let state1 = String::from("state1");
-        let state2 = String::from("state2");
-        let act = MyActor::create(state1, state2);
-
-        let address = act.build().start();
-
-        let result = address
-            .send(MyMessage {
-                from: "actix-send".to_string(),
-                content: "a simple test".to_string(),
-            })
-            .await;
-
-        assert!(result.is_ok());
-    }
+    pub use async_trait::async_trait;
 }
 
 #[cfg(all(feature = "tokio-runtime", feature = "async-std-runtime"))]

@@ -1,5 +1,4 @@
 use actix_send::prelude::*;
-use async_trait::async_trait;
 
 // construct a new actor.
 #[actor]
@@ -20,9 +19,7 @@ struct MyMessage {
 struct MyResult(u32);
 
 // impl MyMessage handler for MyActor
-// handler attribute must be placed above async_trait.
 #[handler]
-#[async_trait]
 impl Handler for MyActor {
     // The msg and handle's return type must match former message macro's result type.
     async fn handle(&mut self, msg: MyMessage) -> Option<MyResult> {
@@ -47,7 +44,7 @@ async fn main() {
     let address = actor.build().num(1).start();
 
     // use address to send message to actor and await on result.
-    let result = address
+    let result: Result<Option<MyResult>, ActixSendError> = address
         .send(MyMessage {
             from: "actix-send".to_string(),
             content: "a simple test".to_string(),

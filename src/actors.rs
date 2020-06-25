@@ -1,4 +1,3 @@
-// use std::collections::VecDeque;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -13,58 +12,6 @@ use futures_channel::oneshot::{
 use tokio::sync::Mutex;
 
 use crate::util::runtime;
-
-// pub struct Context<A, M>
-// where
-//     A: Actor<M>,
-//     M: Message,
-// {
-//     mail: MailBox<A, M>,
-// }
-//
-// impl<A, M> Default for Context<A, M>
-// where
-//     A: Actor<M>,
-//     M: Message,
-// {
-//     fn default() -> Self {
-//         Self {
-//             mail: MailBox {
-//                 msg: AddressReceiver {
-//                     inner: Arc::new(Inner {
-//                         message_queue: Mutex::new(VecDeque::new()),
-//                         _p: PhantomData,
-//                     }),
-//                 },
-//             },
-//         }
-//     }
-// }
-//
-// pub struct MailBox<A, M>
-// where
-//     A: Actor<M>,
-//     M: Message,
-// {
-//     msg: AddressReceiver<A, M>,
-// }
-//
-// pub struct AddressReceiver<A, M>
-// where
-//     A: Actor<M>,
-//     M: Message,
-// {
-//     inner: Arc<Inner<A, M>>,
-// }
-//
-// struct Inner<A, M>
-// where
-//     A: Actor<M>,
-//     M: Message,
-// {
-//     message_queue: Mutex<VecDeque<M>>,
-//     _p: PhantomData<A>,
-// }
 
 pub struct Builder<A, M>
 where
@@ -84,7 +31,7 @@ where
 {
     /// Build multiple actors with the num passed.
     ///
-    /// All the actors share the same state and would steal work from a single async-channel(MPMC queue).
+    /// All the actors would steal work from a single async-channel(MPMC queue).
     pub fn num(mut self, num: usize) -> Self {
         assert!(num > 0, "The number of actors must be larger than 0");
         self.num = num;
@@ -98,7 +45,6 @@ where
 
         if num > 1 {
             let actor = Arc::new(Mutex::new(self.actor));
-
             for _ in 0..num {
                 let actor = actor.clone();
                 let rx = rx.clone();
@@ -124,32 +70,27 @@ where
 }
 
 #[derive(Debug)]
-pub enum ActixSendError<M>
-where
-    M: Message,
-{
+pub enum ActixSendError {
     Canceled,
-    Closed(M),
+    Closed,
 }
 
-impl<M> From<Canceled> for ActixSendError<M>
-where
-    M: Message,
-{
+impl From<Canceled> for ActixSendError {
     fn from(_err: Canceled) -> Self {
         ActixSendError::Canceled
     }
 }
 
-impl<M> From<SendError<(OneshotSender<M::Result>, M)>> for ActixSendError<M>
+impl<M> From<SendError<(OneshotSender<M::Result>, M)>> for ActixSendError
 where
     M: Message,
 {
-    fn from(t: SendError<(OneshotSender<M::Result>, M)>) -> Self {
-        ActixSendError::Closed((t.0).1)
+    fn from(_err: SendError<(OneshotSender<M::Result>, M)>) -> Self {
+        ActixSendError::Closed
     }
 }
 
+#[derive(Clone)]
 pub struct Address<M>
 where
     M: Message,
@@ -161,12 +102,19 @@ impl<M> Address<M>
 where
     M: Message,
 {
+    /// Type `R` is the same as Message's result type in `#[message]` macro
+    ///
     /// Message will be returned in `ActixSendError::Closed(Message)` if the actor is already closed.
-    pub async fn send(&self, msg: M) -> Result<M::Result, ActixSendError<M>> {
+    pub async fn send<R>(&self, msg: impl Into<M>) -> Result<R, ActixSendError>
+    where
+        R: From<M::Result>,
+    {
         let (tx, rx) = channel::<M::Result>();
-        self.tx.send((tx, msg)).await?;
+        self.tx.send((tx, msg.into())).await?;
 
-        Ok(rx.await?)
+        let res = rx.await?;
+
+        Ok(From::from(res))
     }
 }
 
@@ -195,4 +143,72 @@ where
     Self: Actor<M>,
 {
     async fn handle(&mut self, msg: M) -> M::Result;
+}
+
+#[cfg(feature = "tokio-runtime")]
+#[cfg(not(feature = "async-std-runtime"))]
+pub mod test_actor {
+    use crate::prelude::*;
+
+    #[actor_mod]
+    pub mod my_actor {
+        use crate::prelude::*;
+
+        #[actor]
+        pub struct MyActor {
+            state1: String,
+            state2: String,
+        }
+
+        #[message(result = "u8")]
+        pub struct DummyMessage1 {
+            pub from: String,
+        }
+
+        #[message(result = "u16")]
+        pub struct DummyMessage2(pub u32, pub usize);
+
+        #[handler]
+        impl Handler for MyActor {
+            // The msg and handle's return type must match former message macro's result type.
+            async fn handle(&mut self, msg: DummyMessage1) -> u8 {
+                assert_eq!("running1", self.state1);
+                8
+            }
+        }
+
+        #[handler]
+        impl Handler for MyActor {
+            async fn handle(&mut self, msg: DummyMessage2) -> u16 {
+                assert_eq!("running2", self.state2);
+                16
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test() {
+        use super::test_actor::my_actor::*;
+        let state1 = String::from("running1");
+        let state2 = String::from("running2");
+        let actor = MyActor::create(state1, state2);
+
+        // build and start the actor(s).
+        let address = actor.build().num(1).start();
+
+        // construct a new message instance and convert it to a MessageObject
+        let msg = DummyMessage1 {
+            from: "a simple test".to_string(),
+        };
+
+        let msg2 = DummyMessage2(1, 2);
+
+        // use address to send message object to actor and await on result.
+        let res: u8 = address.send(msg).await.unwrap();
+
+        let res2: u16 = address.send(msg2).await.unwrap();
+
+        assert_eq!(res, 8);
+        assert_eq!(res2, 16);
+    }
 }
