@@ -8,60 +8,57 @@
 //! # Example:
 //! ```rust
 //! use actix_send::prelude::*;
-//!
-//! // construct a new actor.
-//! #[actor]
-//! struct MyActor {
-//!     state: String,
-//! }
-//!
-//! // construct a new message with a result type.
-//! // message macro must be placed above other marco attributes
-//! #[message(result = "Option<MyResult>")]
-//! #[derive(Debug)]
-//! struct MyMessage {
-//!     from: String,
-//!     content: String,
-//! }
-//!
-//! // dummy result type for MyMessage
-//! #[derive(Debug)]
-//! struct MyResult(u32);
-//!
-//! // impl MyMessage handler for MyActor
-//! #[handler]
-//! impl Handler for MyActor {
-//!     // The msg and handle's return type must match former message macro's result type.
-//!     async fn handle(&mut self, msg: MyMessage) -> Option<MyResult> {
-//!         println!(
-//!             "Actor state is: {}\r\n\r\nGot Message from: {}\r\n\r\nContent: {}",
-//!             self.state,
-//!             msg.from.as_str(),
-//!             msg.content.as_str()
-//!         );
-//!
-//!         Some(MyResult(123))
-//!     }
-//! }
+//! use my_actor::*;
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     // create an actor instance. The args passed to create function are in the same order of your Actor's struct fields.
 //!     let state = String::from("running");
-//!     let actor = MyActor::create(state);
 //!
-//!     // build and start the actor.
+//!     // create an actor instance. The create function would return our Actor instance.
+//!     let actor = MyActor::create(|| MyActor { state });
+//!
+//!     // build and start the actor(s).
 //!     let address = actor.build().start();
 //!
-//!     // use address to send message to actor and await on result.
-//!     let result: Result<Option<MyResult>, ActixSendError> = address
-//!         .send(MyMessage {
-//!             from: "actix-send".to_string(),
-//!             content: "a simple test".to_string(),
-//!        })
-//!         .await;
+//!     // construct new messages.
+//!     let msg = MyMessage {
+//!         from: "a simple test".to_string(),
+//!     };
 //!
-//!     println!("We got result for message: {:?}", result);
+//!     // use address to send messages to actor and await on result.
+//!     // We need infer our type here. and the type should be the message's result type in #[message] macro
+//!     let res: Result<u8, ActixSendError> = address.send(msg).await;
+//!     println!("We got result for Message1\r\nResult is: {:?}", res);
+//! }
+//!
+//! /*  Implementation of actor */
+//!
+//! // put actor/message/handler in a mod
+//! #[actor_mod]
+//! pub mod my_actor {
+//!     use super::*;
+//!
+//!     // our actor type
+//!     #[actor]
+//!     pub struct MyActor {
+//!         pub state: String
+//!     }
+//!
+//!     // our message type with it's associate result type
+//!     #[message(result = "u8")]
+//!     pub struct MyMessage {
+//!         pub from: String,
+//!     }
+//!
+//!     #[handler]
+//!     impl Handler for MyActor {
+//!         // The msg and handle's return type must match former message macro's result type.
+//!         async fn handle(&mut self, msg: MyMessage) -> u8 {
+//!             println!("Actor State : {}", self.state);
+//!             println!("We got an Message.\r\nfrom : {}", msg.from);
+//!             8
+//!         }
+//!     }
 //! }
 //! ```
 //! # Features
@@ -75,7 +72,7 @@ pub(crate) mod actors;
 pub(crate) mod util;
 
 pub mod prelude {
-    pub use crate::actors::{ActixSendError, Actor, Handler, Message};
+    pub use crate::actors::{ActixSendError, Actor, Address, Handler, Message};
     pub use actix_send_macros::*;
     pub use async_trait::async_trait;
 }
