@@ -1,7 +1,6 @@
 ## Job of this macro set:
 - ### Generate boilerplate implementation for actors.<br> This includes:
-  - `Actor::create` method for creating actor instance.
-  - `BoxedIntervalFuture` implementation for actors.
+  - `Actor::create` method for creating actor instance.actors.
   - `Actor` trait implementation for actors.  
   - `Message` trait implementation for actors.
   - `Handler` trait implementation for actors.(Including `async_trait` implementation)

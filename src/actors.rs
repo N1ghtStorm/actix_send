@@ -1,20 +1,21 @@
-use std::collections::VecDeque;
 use std::future::Future;
 use std::marker::PhantomData;
-use std::pin::Pin;
-use std::sync::{
-    // atomic::AtomicBool,
-    Arc,
-    Mutex,
-};
-// use std::task::{Context, Poll};
+use std::sync::{atomic::Ordering, Arc};
 use std::time::Duration;
 
 use async_channel::{unbounded, Receiver, SendError, Sender};
-use futures_channel::oneshot::{channel, Canceled, Sender as OneshotSender};
+use futures::{
+    channel::oneshot::{channel, Canceled, Sender as OneshotSender},
+    StreamExt,
+};
 use tokio::sync::Mutex as AsyncMutex;
 
-use crate::util::runtime;
+use crate::context::ActorContext;
+use crate::interval::{IntervalFuture, IntervalFutureHandler};
+use crate::util::{
+    constant::{ACTIVE, SHUT, SLEEP},
+    runtime,
+};
 
 pub struct Builder<A>
 where
@@ -110,6 +111,7 @@ where
     }
 }
 
+// the gut of the event loop of an actor.
 fn spawn_loop<A>(mut actor: A, rx: Receiver<ChannelMessage<A>>)
 where
     A: Actor + Handler + 'static,
@@ -118,83 +120,102 @@ where
 {
     let ctx: ActorContext<A> = ActorContext::new();
 
+    let ctx1 = ctx.clone();
     runtime::spawn(async move {
-        loop {
-            // handle delayed messages first
-            let opt = ctx.delayed_messages.lock().unwrap().pop_front();
-            if let Some(msg) = opt {
-                let _ = actor.handle(msg).await;
+        while let Ok(msg) = rx.recv().await {
+            match msg {
+                ChannelMessage::Instant(tx, msg) => ctx1.messages.lock().push_back((tx, msg)),
+                ChannelMessage::Delayed(msg, dur) => {
+                    let messages = Arc::downgrade(&ctx1.messages);
+                    // ToDo: We should add select for this future for canceling.
+                    runtime::spawn(async move {
+                        runtime::delay_for(dur).await;
+                        if let Some(messages) = messages.upgrade() {
+                            messages.lock().push_front((None, msg));
+                        }
+                    })
+                }
+                ChannelMessage::Interval(tx, interval, dur) => {
+                    // we clone the state of interval future.(Which is SLEEP by default)
+                    let state = interval.state.clone();
+                    ctx1.interval_futures.lock().await.push(interval);
+
+                    // We spawn a future that check the interval and change the state to ACTIVE.
+                    // We return a handler of said future that can cancel the future.
+
+                    let (mut checker, handler) =
+                        crate::interval::interval_future_handler(state, dur);
+
+                    // checker would poll a stream until the state become SHUT
+                    runtime::spawn(async move { while checker.next().await.is_some() {} });
+
+                    #[cfg(feature = "tokio-runtime")]
+                    #[cfg(not(feature = "async-std-runtime"))]
+                    tokio::task::yield_now().await;
+
+                    let _ = tx.send(handler);
+                }
+            }
+        }
+    });
+
+    runtime::spawn(async move {
+        'event: loop {
+            if ctx.state.load(Ordering::Relaxed) == SHUT {
+                loop {
+                    let opt = ctx.messages.lock().pop_front();
+                    match opt {
+                        Some((tx, msg)) => {
+                            let res = actor.handle(msg).await;
+                            if let Some(tx) = tx {
+                                let _ = tx.send(res);
+                            }
+                        }
+                        None => break 'event,
+                    }
+                }
             }
 
-            // handle interval futures
+            // handle messages first
+            let opt = ctx.messages.lock().pop_front();
+            if let Some((tx, msg)) = opt {
+                let res = actor.handle(msg).await;
+                if let Some(tx) = tx {
+                    let _ = tx.send(res);
+                }
+            }
 
-            // receive messages and handle.
-            match rx.recv().await {
-                // channel is gone we should quit now.
-                // ToDo: we should graceful shutdown.
-                Err(_) => break,
-                Ok(msg) => match msg {
-                    ChannelMessage::Instant(tx, msg) => {
-                        let res = actor.handle(msg).await;
-                        if let Some(tx) = tx {
-                            let _ = tx.send(res);
-                        }
+            // handle interval futures.
+            let mut should_remove = false;
+
+            {
+                let mut intervals = ctx.interval_futures.lock().await;
+
+                for interval in intervals.iter_mut() {
+                    let state = interval.state.load(Ordering::Acquire);
+                    if state == ACTIVE {
+                        actor = interval.handle(actor).await;
+                        // There is a chance user is canceling the interval right now so we only change the state if it's still ACTIVE
+                        let _ = interval.state.compare_exchange(
+                            ACTIVE,
+                            SLEEP,
+                            Ordering::Relaxed,
+                            Ordering::Relaxed,
+                        );
                     }
-                    ChannelMessage::Delayed(msg, dur) => {
-                        let delayed = ctx.delayed_messages.clone();
-                        // ToDo: We should add select for this future for canceling.
-                        runtime::spawn(async move {
-                            runtime::delay_for(dur).await;
-                            delayed.lock().unwrap().push_back(msg);
-                        })
+                    if state == SHUT {
+                        should_remove = true;
                     }
-                    // ChannelMessage::Interval(tx, interval, dur) => unimplemented!(),
-                    _ => unimplemented!(),
-                },
+                }
+
+                // ToDo: we probably would want to iter and mutate the vector at the same time.
+                if should_remove {
+                    intervals.retain(|interval| interval.state.load(Ordering::Relaxed) != SHUT);
+                }
             }
         }
     });
 }
-
-struct ActorContext<A>
-where
-    A: Actor + Send,
-    A::Message: Message + Send,
-{
-    // next_id: usize,
-    // interval_futures: Arc<Mutex<Vec>>,
-    // timed_handlers: Vec<Arc<AtomicBool>>,
-    delayed_messages: Arc<Mutex<VecDeque<A::Message>>>,
-}
-
-impl<A> ActorContext<A>
-where
-    A: Actor + Send,
-    A::Message: Message + Send,
-{
-    fn new() -> Self {
-        Self {
-            // next_id: 0,
-            // interval_futures: Vec::new(),
-            // timed_handlers: Vec::new(),
-            delayed_messages: Arc::new(Mutex::new(VecDeque::new())),
-        }
-    }
-}
-
-// struct IntervalFuture<A> {
-//     id: usize,
-//     func: Box<dyn Fn(&mut A) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>,
-//     interval: Duration,
-// }
-//
-// impl<A> Future for IntervalFuture<A> {
-//     type Output = ();
-//
-//     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-//         self.interval
-//     }
-// }
 
 enum ChannelMessage<A>
 where
@@ -207,8 +228,8 @@ where
     ),
     Delayed(A::Message, Duration),
     Interval(
-        OneshotSender<IntervalHandler>,
-        Box<dyn Fn(&mut A) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>,
+        OneshotSender<IntervalFutureHandler>,
+        IntervalFuture<A>,
         Duration,
     ),
 }
@@ -254,6 +275,7 @@ where
     /// Type `R` is the same as Message's result type in `#[message]` macro
     ///
     /// Message will be returned in `ActixSendError::Closed(Message)` if the actor is already closed.
+    #[must_use = "futures do nothing unless you `.await` or poll them"]
     pub async fn send<R>(&self, msg: impl Into<A::Message>) -> Result<R, ActixSendError>
     where
         R: From<<A::Message as Message>::Result>,
@@ -281,17 +303,24 @@ where
         self._do_send(msg);
     }
 
-    pub async fn register_interval<F, Fut>(
+    /// register an interval future for actor. An actor can have multiple interval futures registered.
+    ///
+    /// a `IntervalHandler` would return that can be used to cancel it.
+    #[must_use = "futures do nothing unless you `.await` or poll them"]
+    pub async fn run_interval<F, Fut>(
         &self,
         dur: Duration,
         f: F,
-    ) -> Result<IntervalHandler, ActixSendError>
+    ) -> Result<IntervalFutureHandler, ActixSendError>
     where
-        F: Fn(&mut A) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'static,
+        F: Fn(A) -> Fut + Send + 'static,
+        Fut: Future<Output = A> + Send + 'static,
     {
-        let (tx, rx) = channel::<IntervalHandler>();
+        let (tx, rx) = channel::<IntervalFutureHandler>();
 
-        let channel_message = ChannelMessage::Interval(tx, Box::new(f), dur);
+        let object = crate::interval::IntervalFutureContainer(f, PhantomData, PhantomData).pack();
+
+        let channel_message = ChannelMessage::Interval(tx, object, dur);
 
         self.tx.send(channel_message).await?;
 
@@ -305,8 +334,6 @@ where
         });
     }
 }
-
-pub struct IntervalHandler {}
 
 pub trait Actor
 where
@@ -386,7 +413,7 @@ pub mod test_actor {
         let actor = TestActor::create(|| TestActor { state1, state2 });
 
         // build and start the actor(s).
-        let address = actor.build().num(1).start();
+        let address: Address<TestActor> = actor.build().num(1).start();
 
         // construct a new message instance and convert it to a MessageObject
         let msg = DummyMessage1 {

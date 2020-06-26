@@ -1,3 +1,4 @@
+#![feature(drain_filter)]
 //! actix_send is an actor pattern loosely based on the design of [actix](https://crates.io/crates/actix) that can be run on various runtime.
 //!
 //! # Limitation:
@@ -69,6 +70,8 @@
 //! | `async-std-runtime` | Enable support for the `async-std` crate. | [async-std](https://crates.io/crates/async-std)<br>[tokio](https://crates.io/crates/tokio) with `tokio/sync` feature | no |
 
 pub(crate) mod actors;
+pub(crate) mod context;
+pub(crate) mod interval;
 pub(crate) mod util;
 
 pub mod prelude {

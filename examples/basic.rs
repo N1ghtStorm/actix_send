@@ -1,7 +1,8 @@
 use crate::my_actor::*;
 use actix_send::prelude::*;
+use std::time::Duration;
 
-#[tokio::main]
+#[tokio::main(threaded_scheduler, core_threads = 12)]
 async fn main() {
     let state1 = String::from("running");
     let state2 = String::from("running");
@@ -32,6 +33,30 @@ async fn main() {
     println!("We got result for Message1\r\nResult is: {}\r\n", res);
     println!("We got result for Message2\r\nResult is: {}\r\n", res2);
     println!("We got result for Message3\r\nResult is: {}\r\n", res3.0);
+
+    // register an interval future for actor with given duration.
+    let handler = address
+        .run_interval(Duration::from_secs(1), |actor| async {
+            // unfortunately it's hard to access a reference from an async closure.
+            // So every interval future would take ownership of the actor and return it in the end
+            println!("actor state is: {}", &actor.state1);
+            actor
+        })
+        .await
+        .unwrap();
+
+    let mut interval = tokio::time::interval(Duration::from_secs(1));
+
+    for i in 0..5 {
+        if i == 3 {
+            // cancel the interval future after 5 seconds.
+            handler.cancel();
+            println!("interval future stopped");
+        }
+
+        interval.tick().await;
+    }
+    println!("example finish successfully");
 }
 
 /*  Implementation of actor */
@@ -66,8 +91,8 @@ pub mod my_actor {
     impl Handler for MyActor {
         // The msg and handle's return type must match former message macro's result type.
         async fn handle(&mut self, msg: Message1) -> u8 {
-            println!("Actor State1 : {}", self.state1);
-            println!("We got an Message1.\r\nfrom : {}\r\n", msg.from);
+            // println!("Actor State1 : {}", self.state1);
+            // println!("We got an Message1.\r\nfrom : {}\r\n", msg.from);
             8
         }
     }

@@ -31,12 +31,12 @@ async-std-runtime = ["async-std", "tokio/sync"]
 actix_send_macros = { path = "./actix-send-macros" }
 async-channel = "1.1.0"
 async-trait = "0.1.35"
-futures-channel = { version = "0.3.5" }
 futures = "0.3.5"
+parking_lot = "0.11.0"
 
 async-std = { version = "1.6.1", optional = true }
 tokio = { version = "0.2.21", optional = true, default-features = false }
 
 [dev-dependencies]
-tokio = { version = "0.2.21", features = ["rt-threaded", "macros"] }
+tokio = { version = "0.2.21", features = ["full"] }
 async-std = { version = "1.6.1", features = ["unstable"] }
