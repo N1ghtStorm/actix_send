@@ -1,10 +1,18 @@
+use std::collections::VecDeque;
+use std::future::Future;
 use std::marker::PhantomData;
-use std::sync::Arc;
+use std::pin::Pin;
+use std::sync::{
+    // atomic::AtomicBool,
+    Arc,
+    Mutex,
+};
+// use std::task::{Context, Poll};
+use std::time::Duration;
 
 use async_channel::{unbounded, Receiver, SendError, Sender};
-use async_trait::async_trait;
 use futures_channel::oneshot::{channel, Canceled, Sender as OneshotSender};
-use tokio::sync::Mutex;
+use tokio::sync::Mutex as AsyncMutex;
 
 use crate::util::runtime;
 
@@ -32,21 +40,23 @@ where
     }
 
     pub fn start(self) -> Address<A> {
-        let (tx, rx) = unbounded::<ChannelSender<A::Message>>();
+        let (tx, rx) = unbounded::<ChannelMessage<A>>();
 
         let num = self.num;
 
         if num > 1 {
-            let actor = Arc::new(Mutex::new(self.actor));
+            let actor = Arc::new(AsyncMutex::new(self.actor));
             for _ in 0..num {
                 let actor = actor.clone();
                 let rx = rx.clone();
                 runtime::spawn(async move {
-                    while let Ok((tx, msg)) = rx.recv().await {
-                        let mut act = actor.lock().await;
-                        let res = act.handle(msg).await;
-                        if let Some(tx) = tx {
-                            let _ = tx.send(res);
+                    while let Ok(msg) = rx.recv().await {
+                        if let ChannelMessage::Instant(tx, msg) = msg {
+                            let mut act = actor.lock().await;
+                            let res = act.handle(msg).await;
+                            if let Some(tx) = tx {
+                                let _ = tx.send(res);
+                            }
                         }
                     }
                 });
@@ -77,7 +87,7 @@ where
 
         let actor = f(self.actor);
 
-        let (tx, rx) = unbounded::<ChannelSender<AA::Message>>();
+        let (tx, rx) = unbounded::<ChannelMessage<AA>>();
 
         for _ in 0..num {
             let actor = actor.clone();
@@ -100,20 +110,107 @@ where
     }
 }
 
-fn spawn_loop<A: Actor>(mut actor: A, rx: Receiver<ChannelSender<A::Message>>)
+fn spawn_loop<A>(mut actor: A, rx: Receiver<ChannelMessage<A>>)
 where
     A: Actor + Handler + 'static,
     A::Message: Message + Send + 'static,
     <A::Message as Message>::Result: Send,
 {
+    let ctx: ActorContext<A> = ActorContext::new();
+
     runtime::spawn(async move {
-        while let Ok((tx, msg)) = rx.recv().await {
-            let res = actor.handle(msg).await;
-            if let Some(tx) = tx {
-                let _ = tx.send(res);
+        loop {
+            // handle delayed messages first
+            let opt = ctx.delayed_messages.lock().unwrap().pop_front();
+            if let Some(msg) = opt {
+                let _ = actor.handle(msg).await;
+            }
+
+            // handle interval futures
+
+            // receive messages and handle.
+            match rx.recv().await {
+                // channel is gone we should quit now.
+                // ToDo: we should graceful shutdown.
+                Err(_) => break,
+                Ok(msg) => match msg {
+                    ChannelMessage::Instant(tx, msg) => {
+                        let res = actor.handle(msg).await;
+                        if let Some(tx) = tx {
+                            let _ = tx.send(res);
+                        }
+                    }
+                    ChannelMessage::Delayed(msg, dur) => {
+                        let delayed = ctx.delayed_messages.clone();
+                        // ToDo: We should add select for this future for canceling.
+                        runtime::spawn(async move {
+                            runtime::delay_for(dur).await;
+                            delayed.lock().unwrap().push_back(msg);
+                        })
+                    }
+                    // ChannelMessage::Interval(tx, interval, dur) => unimplemented!(),
+                    _ => unimplemented!(),
+                },
             }
         }
     });
+}
+
+struct ActorContext<A>
+where
+    A: Actor + Send,
+    A::Message: Message + Send,
+{
+    // next_id: usize,
+    // interval_futures: Arc<Mutex<Vec>>,
+    // timed_handlers: Vec<Arc<AtomicBool>>,
+    delayed_messages: Arc<Mutex<VecDeque<A::Message>>>,
+}
+
+impl<A> ActorContext<A>
+where
+    A: Actor + Send,
+    A::Message: Message + Send,
+{
+    fn new() -> Self {
+        Self {
+            // next_id: 0,
+            // interval_futures: Vec::new(),
+            // timed_handlers: Vec::new(),
+            delayed_messages: Arc::new(Mutex::new(VecDeque::new())),
+        }
+    }
+}
+
+// struct IntervalFuture<A> {
+//     id: usize,
+//     func: Box<dyn Fn(&mut A) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>,
+//     interval: Duration,
+// }
+//
+// impl<A> Future for IntervalFuture<A> {
+//     type Output = ();
+//
+//     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+//         self.interval
+//     }
+// }
+
+enum ChannelMessage<A>
+where
+    A: Actor,
+    A::Message: Message,
+{
+    Instant(
+        Option<OneshotSender<<A::Message as Message>::Result>>,
+        A::Message,
+    ),
+    Delayed(A::Message, Duration),
+    Interval(
+        OneshotSender<IntervalHandler>,
+        Box<dyn Fn(&mut A) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>,
+        Duration,
+    ),
 }
 
 #[derive(Debug)]
@@ -128,16 +225,15 @@ impl From<Canceled> for ActixSendError {
     }
 }
 
-impl<M> From<SendError<ChannelSender<M>>> for ActixSendError
+impl<A> From<SendError<ChannelMessage<A>>> for ActixSendError
 where
-    M: Message,
+    A: Actor,
+    A::Message: Message,
 {
-    fn from(_err: SendError<ChannelSender<M>>) -> Self {
+    fn from(_err: SendError<ChannelMessage<A>>) -> Self {
         ActixSendError::Closed
     }
 }
-
-type ChannelSender<M> = (Option<OneshotSender<<M as Message>::Result>>, M);
 
 #[derive(Clone)]
 pub struct Address<A>
@@ -145,14 +241,14 @@ where
     A: Actor,
     A::Message: Message,
 {
-    tx: Sender<ChannelSender<A::Message>>,
+    tx: Sender<ChannelMessage<A>>,
     _a: PhantomData<A>,
 }
 
 impl<A> Address<A>
 where
-    A: Actor,
-    A::Message: Message + Send + 'static,
+    A: Actor + 'static,
+    A::Message: Message,
     <A::Message as Message>::Result: Send,
 {
     /// Type `R` is the same as Message's result type in `#[message]` macro
@@ -163,7 +259,10 @@ where
         R: From<<A::Message as Message>::Result>,
     {
         let (tx, rx) = channel::<<A::Message as Message>::Result>();
-        self.tx.send((Some(tx), msg.into())).await?;
+
+        let channel_message = ChannelMessage::Instant(Some(tx), msg.into());
+
+        self.tx.send(channel_message).await?;
 
         let res = rx.await?;
 
@@ -172,13 +271,42 @@ where
 
     /// Send a message to actor and ignore the result.
     pub fn do_send(&self, msg: impl Into<A::Message> + Send + 'static) {
-        let this = self.tx.clone();
+        let msg = ChannelMessage::Instant(None, msg.into());
+        self._do_send(msg);
+    }
 
+    /// run a message after a certain amount of delay.
+    pub fn run_later(&self, msg: impl Into<A::Message> + Send + 'static, delay: Duration) {
+        let msg = ChannelMessage::Delayed(msg.into(), delay);
+        self._do_send(msg);
+    }
+
+    pub async fn register_interval<F, Fut>(
+        &self,
+        dur: Duration,
+        f: F,
+    ) -> Result<IntervalHandler, ActixSendError>
+    where
+        F: Fn(&mut A) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'static,
+    {
+        let (tx, rx) = channel::<IntervalHandler>();
+
+        let channel_message = ChannelMessage::Interval(tx, Box::new(f), dur);
+
+        self.tx.send(channel_message).await?;
+
+        Ok(rx.await?)
+    }
+
+    fn _do_send(&self, msg: ChannelMessage<A>) {
+        let this = self.tx.clone();
         runtime::spawn(async move {
-            let _ = this.send((None, msg.into())).await;
+            let _ = this.send(msg).await;
         });
     }
 }
+
+pub struct IntervalHandler {}
 
 pub trait Actor
 where
@@ -194,12 +322,12 @@ where
     }
 }
 
-// ToDo: Do we still need a message trait?. Since Message is already an associate type of Actor we can move Result type to Actor as well.
+// ToDo: Do we still need a message trait?. Message is already an associate type of Actor we can move Result type to Actor as well.
 pub trait Message: Send {
     type Result;
 }
 
-#[async_trait]
+#[async_trait::async_trait]
 pub trait Handler
 where
     Self: Actor,

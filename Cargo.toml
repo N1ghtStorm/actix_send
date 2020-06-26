@@ -24,7 +24,7 @@ path = "examples/concurrency.rs"
 
 [features]
 default = ["tokio-runtime"]
-tokio-runtime = ["tokio/rt-threaded", "tokio/sync"]
+tokio-runtime = ["tokio/rt-threaded", "tokio/time", "tokio/sync"]
 async-std-runtime = ["async-std", "tokio/sync"]
 
 [dependencies]
@@ -32,6 +32,7 @@ actix_send_macros = { path = "./actix-send-macros" }
 async-channel = "1.1.0"
 async-trait = "0.1.35"
 futures-channel = { version = "0.3.5" }
+futures = "0.3.5"
 
 async-std = { version = "1.6.1", optional = true }
 tokio = { version = "0.2.21", optional = true, default-features = false }
