@@ -24,8 +24,8 @@ path = "examples/concurrency.rs"
 
 [features]
 default = ["tokio-runtime"]
-tokio-runtime = ["tokio/rt-threaded", "tokio/time", "tokio/sync"]
-async-std-runtime = ["async-std", "tokio/sync"]
+tokio-runtime = ["tokio/rt-threaded", "tokio/time"]
+async-std-runtime = ["async-std"]
 
 [dependencies]
 actix_send_macros = { path = "./actix-send-macros" }

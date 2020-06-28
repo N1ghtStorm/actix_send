@@ -1,19 +1,24 @@
 use std::collections::HashMap;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc, Mutex,
+};
 use std::thread::ThreadId;
 
 use actix_send::prelude::*;
 
-use crate::cloneable_actor::CloneAbleActor;
-use crate::shared_actor::{Message2, Message2Res, ShareableActor};
+use crate::cloneable_actor::NonSharedActor;
+use crate::shared_actor::{Message2, Message2Res, SharedActor};
 
 #[actor_mod]
 pub mod shared_actor {
     use super::*;
 
+    // Actor is shareable as long as it's state contains thread safe share able data structure.
     #[actor]
-    pub struct ShareableActor {
-        pub state: usize,
-        pub info: HashMap<ThreadId, usize>,
+    pub struct SharedActor {
+        pub state: Arc<AtomicUsize>,
+        pub info: Arc<Mutex<HashMap<ThreadId, usize>>>,
     }
 
     #[message(result = "u8")]
@@ -28,15 +33,16 @@ pub mod shared_actor {
     }
 
     #[handler]
-    impl Handler for ShareableActor {
+    impl Handler for SharedActor {
         async fn handle(&mut self, _msg: Message1) -> u8 {
-            self.state += 1;
+            self.state.fetch_add(1, Ordering::Relaxed);
             let id = std::thread::current().id();
-            let key = self.info.get_mut(&id);
+            let mut guard = self.info.lock().unwrap();
+            let key = guard.get_mut(&id);
             match key {
                 Some(key) => *key += 1,
                 None => {
-                    self.info.insert(id, 1);
+                    guard.insert(id, 1);
                 }
             };
             1
@@ -44,10 +50,15 @@ pub mod shared_actor {
     }
 
     #[handler]
-    impl Handler for ShareableActor {
+    impl Handler for SharedActor {
         async fn handle(&mut self, _msg: Message2) -> Vec<Message2Res> {
-            println!("Actor have handled a total of {} messages\r\n", self.state);
+            println!(
+                "Actor have handled a total of {} messages\r\n",
+                self.state.load(Ordering::SeqCst)
+            );
             self.info
+                .lock()
+                .unwrap()
                 .iter()
                 .map(|(thread_id, count)| Message2Res {
                     thread_id: *thread_id,
@@ -62,9 +73,9 @@ pub mod shared_actor {
 pub mod cloneable_actor {
     use super::*;
 
+    // Actor must be a type that can impl with Copy and/or Clone
     #[actor]
-    #[derive(Clone)]
-    pub struct CloneAbleActor {
+    pub struct NonSharedActor {
         pub state: usize,
     }
 
@@ -72,7 +83,7 @@ pub mod cloneable_actor {
     pub struct Message1;
 
     #[handler]
-    impl Handler for CloneAbleActor {
+    impl Handler for NonSharedActor {
         async fn handle(&mut self, _msg: Message1) -> usize {
             self.state += 1;
             self.state
@@ -83,10 +94,9 @@ pub mod cloneable_actor {
 #[tokio::main]
 async fn main() {
     // build and start shareable actors.
-    // Actors share the same address, the same actor state.
-    let actor = ShareableActor::create(|| ShareableActor {
-        state: 0,
-        info: Default::default(),
+    let actor = SharedActor::create(|| SharedActor {
+        state: Arc::new(AtomicUsize::new(0)),
+        info: Arc::new(Mutex::new(HashMap::new())),
     });
 
     let address = actor.build().num(12).start();
@@ -104,14 +114,10 @@ async fn main() {
         println!("{:?}\r\nhandled {} messages\r\n", i.thread_id, i.count);
     }
 
-    // build and start cloneable actors.
-    // Actors share the same address, actors don't share state and every one have an unique state of its own.
-    let actor2 = CloneAbleActor::create(|| CloneAbleActor { state: 0 });
+    // build and start non share actors.
+    let actor2 = NonSharedActor::create(|| NonSharedActor { state: 0 });
 
-    let address2 = actor2.build().num(12).start_cloneable(|actor| {
-        // This closure is used to add Clone bound requirement for our actor.
-        actor
-    });
+    let address2 = actor2.build().num(12).start();
 
     // send messages
     for _i in 0..1_000 {

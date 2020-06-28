@@ -40,6 +40,7 @@ async fn main() {
             // unfortunately it's hard to access a reference from an async closure.
             // So every interval future would take ownership of the actor and return it in the end
             println!("actor state is: {}", &actor.state1);
+
             actor
         })
         .await

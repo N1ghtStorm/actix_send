@@ -7,11 +7,14 @@ use std::task::{Context, Poll, Waker};
 use parking_lot::Mutex;
 
 use crate::util::runtime;
+use futures::future::Either;
 
 // helper function for spawn a future on runtime and return a handler that can cancel it.
-pub(crate) fn spawn_cancelable<F>(f: F) -> FutureHandler
+pub(crate) fn spawn_cancelable<F, FN>(f: F, cancel_now: bool, on_cancel: FN) -> FutureHandler
 where
     F: Future + Unpin + Send + 'static,
+    <F as Future>::Output: Send,
+    FN: Fn() + Send + 'static,
 {
     let waker = Arc::new(Mutex::new(None));
 
@@ -24,7 +27,14 @@ where
     };
 
     runtime::spawn(async move {
-        let _ = futures::future::select(finisher, f).await;
+        let either = futures::future::select(finisher, f).await;
+
+        if let Either::Left((_, f)) = either {
+            on_cancel();
+            if !cancel_now {
+                let _ = f.await;
+            }
+        }
     });
 
     FutureHandler { state, waker }

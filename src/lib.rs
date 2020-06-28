@@ -65,9 +65,9 @@
 //! # Features
 //! | Feature | Description | Extra dependencies | Default |
 //! | ------- | ----------- | ------------------ | ------- |
-//! | `default` | The same as `tokio-runtime` feature | [async-channel]("https://github.com/stjepang/async-channel")<br>[async-trait](https://crates.io/crates/async-trait)<br>[futures-channel](https://crates.io/crates/futures-channel) | yes |
+//! | `default` | The same as `tokio-runtime` feature | [async-channel]("https://github.com/stjepang/async-channel")<br>[async-trait](https://crates.io/crates/async-trait)<br>[futures](https://crates.io/crates/futures) | yes |
 //! | `tokio-runtime` | Enable support for the `tokio` crate. | [tokio](https://crates.io/crates/tokio) | yes |
-//! | `async-std-runtime` | Enable support for the `async-std` crate. | [async-std](https://crates.io/crates/async-std)<br>[tokio](https://crates.io/crates/tokio) with `tokio/sync` feature | no |
+//! | `async-std-runtime` | Enable support for the `async-std` crate. | [async-std](https://crates.io/crates/async-std) | no |
 
 pub(crate) mod actors;
 pub(crate) mod context;

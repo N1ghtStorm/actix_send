@@ -6,7 +6,6 @@ use std::time::Duration;
 use async_channel::{unbounded, Receiver, SendError, Sender};
 use futures::channel::oneshot::{channel, Canceled, Sender as OneshotSender};
 use parking_lot::Mutex;
-use tokio::sync::Mutex as AsyncMutex;
 
 use crate::context::ActorContext;
 use crate::interval::IntervalFuture;
@@ -25,7 +24,7 @@ where
 
 impl<A> Builder<A>
 where
-    A: Actor + Handler + 'static,
+    A: Actor + Handler + Clone + 'static,
     A::Message: Message + Send + 'static,
     <A::Message as Message>::Result: Send,
 {
@@ -39,59 +38,19 @@ where
     }
 
     pub fn start(self) -> Address<A> {
-        let (tx, rx) = unbounded::<ChannelMessage<A>>();
-
         let num = self.num;
+
+        let (tx, rx) = unbounded::<ChannelMessage<A>>();
 
         let mut handlers = Vec::new();
 
         if num > 1 {
-            let actor = Arc::new(AsyncMutex::new(self.actor));
             for _ in 0..num {
-                let actor = actor.clone();
-                let rx = rx.clone();
-                runtime::spawn(async move {
-                    while let Ok(msg) = rx.recv().await {
-                        if let ChannelMessage::Instant(tx, msg) = msg {
-                            let mut act = actor.lock().await;
-                            let res = act.handle(msg).await;
-                            if let Some(tx) = tx {
-                                let _ = tx.send(res);
-                            }
-                        }
-                    }
-                });
+                let handler = spawn_loop(self.actor.clone(), tx.clone(), rx.clone());
+                handlers.push(handler);
             }
         } else {
             let handler = spawn_loop(self.actor, tx.clone(), rx);
-            handlers.push(handler);
-        }
-
-        Address::new(tx, handlers)
-    }
-
-    /// Start cloneable actors.
-    ///
-    /// *. Actors do not share state as we need `&mut Self` with every actor.
-    pub fn start_cloneable<F, AA>(self, f: F) -> Address<AA>
-    where
-        F: FnOnce(A) -> AA,
-        AA: Actor + Handler + Clone + 'static,
-        AA::Message: Message + Send + 'static,
-        <AA::Message as Message>::Result: Send,
-    {
-        let num = self.num;
-
-        Self::check_num(num, 1);
-
-        let actor = f(self.actor);
-
-        let (tx, rx) = unbounded::<ChannelMessage<AA>>();
-
-        let mut handlers = Vec::new();
-
-        for _ in 0..num {
-            let handler = spawn_loop(actor.clone(), tx.clone(), rx.clone());
             handlers.push(handler);
         }
 
@@ -131,10 +90,14 @@ where
                 }
                 ChannelMessage::Delayed(msg, dur) => {
                     let tx = ctx.tx.clone();
-                    let delayed_handler = spawn_cancelable(Box::pin(async move {
-                        runtime::delay_for(dur).await;
-                        let _ = tx.send(ChannelMessage::Instant(None, msg)).await;
-                    }));
+                    let delayed_handler = spawn_cancelable(
+                        Box::pin(async move {
+                            runtime::delay_for(dur).await;
+                            let _ = tx.send(ChannelMessage::Instant(None, msg)).await;
+                        }),
+                        true,
+                        || {},
+                    );
                     ctx.delayed_handlers.push(delayed_handler);
                 }
                 ChannelMessage::IntervalFuture(idx) => {
@@ -161,7 +124,7 @@ where
                     });
 
                     // spawn a cancelable future and use the handler to execute the cancellation.
-                    let handler = spawn_cancelable(interval_loop);
+                    let handler = spawn_cancelable(interval_loop, true, || {});
 
                     let _ = tx.send(handler);
                 }
@@ -169,7 +132,8 @@ where
         }
     };
 
-    spawn_cancelable(Box::pin(fut))
+    // ToDo: We should define on_cancel here so channel would reject new messages and handle all remaining instant messages.
+    spawn_cancelable(Box::pin(fut), true, || {})
 }
 
 pub(crate) enum ChannelMessage<A>
@@ -303,7 +267,7 @@ where
 
     /// register an interval future for actor. An actor can have multiple interval futures registered.
     ///
-    /// a `IntervalHandler` would return that can be used to cancel it.
+    /// a `FutureHandler` would return that can be used to cancel it.
     #[must_use = "futures do nothing unless you `.await` or poll them"]
     pub async fn run_interval<F, Fut>(
         &self,
