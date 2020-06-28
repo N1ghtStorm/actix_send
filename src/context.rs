@@ -1,33 +1,18 @@
-use std::collections::VecDeque;
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-};
+use async_channel::Sender;
 
-use futures::channel::oneshot::Sender as OneshotSender;
-use parking_lot::Mutex;
-use tokio::sync::Mutex as AsyncMutex;
-
-use crate::actors::{Actor, Message};
+use crate::actors::{Actor, ChannelMessage, Message};
 use crate::interval::IntervalFuture;
-use crate::util::constant::{ACTIVE, SHUT};
+use crate::util::future_handle::FutureHandler;
 
 pub(crate) struct ActorContext<A>
 where
     A: Actor + Send,
     A::Message: Message + Send,
 {
-    pub(crate) state: Arc<AtomicUsize>,
-    pub(crate) interval_futures: Arc<AsyncMutex<Vec<IntervalFuture<A>>>>,
-    #[allow(clippy::type_complexity)]
-    pub(crate) messages: Arc<
-        Mutex<
-            VecDeque<(
-                Option<OneshotSender<<A::Message as Message>::Result>>,
-                A::Message,
-            )>,
-        >,
-    >,
+    pub(crate) tx: Sender<ChannelMessage<A>>,
+    pub(crate) actor: Option<A>,
+    pub(crate) delayed_handlers: Vec<FutureHandler>,
+    pub(crate) interval_futures: Vec<IntervalFuture<A>>,
 }
 
 impl<A> ActorContext<A>
@@ -35,35 +20,25 @@ where
     A: Actor + Send,
     A::Message: Message + Send,
 {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(tx: Sender<ChannelMessage<A>>, actor: A) -> Self {
         Self {
-            state: Arc::new(AtomicUsize::new(ACTIVE)),
-            interval_futures: Arc::new(AsyncMutex::new(Vec::new())),
-            messages: Arc::new(Mutex::new(VecDeque::new())),
+            tx,
+            actor: Some(actor),
+            delayed_handlers: Vec::new(),
+            interval_futures: Vec::new(),
         }
     }
 }
 
-impl<A> Clone for ActorContext<A>
-where
-    A: Actor + Send,
-    A::Message: Message + Send,
-{
-    fn clone(&self) -> Self {
-        Self {
-            state: self.state.clone(),
-            interval_futures: self.interval_futures.clone(),
-            messages: self.messages.clone(),
-        }
-    }
-}
-
+// We use the delayed handler to cancel all delayed messages that are not processed.
 impl<A> Drop for ActorContext<A>
 where
     A: Actor + Send,
     A::Message: Message + Send,
 {
     fn drop(&mut self) {
-        self.state.store(SHUT, Ordering::SeqCst);
+        for handler in self.delayed_handlers.iter() {
+            handler.cancel();
+        }
     }
 }

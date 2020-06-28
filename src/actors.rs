@@ -1,19 +1,17 @@
 use std::future::Future;
 use std::marker::PhantomData;
-use std::sync::{atomic::Ordering, Arc};
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_channel::{unbounded, Receiver, SendError, Sender};
-use futures::{
-    channel::oneshot::{channel, Canceled, Sender as OneshotSender},
-    StreamExt,
-};
+use futures::channel::oneshot::{channel, Canceled, Sender as OneshotSender};
+use parking_lot::Mutex;
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::context::ActorContext;
-use crate::interval::{IntervalFuture, IntervalFutureHandler};
+use crate::interval::IntervalFuture;
 use crate::util::{
-    constant::{ACTIVE, SHUT, SLEEP},
+    future_handle::{spawn_cancelable, FutureHandler},
     runtime,
 };
 
@@ -45,6 +43,8 @@ where
 
         let num = self.num;
 
+        let mut handlers = Vec::new();
+
         if num > 1 {
             let actor = Arc::new(AsyncMutex::new(self.actor));
             for _ in 0..num {
@@ -63,13 +63,11 @@ where
                 });
             }
         } else {
-            spawn_loop(self.actor, rx);
+            let handler = spawn_loop(self.actor, tx.clone(), rx);
+            handlers.push(handler);
         }
 
-        Address {
-            tx,
-            _a: PhantomData,
-        }
+        Address::new(tx, handlers)
     }
 
     /// Start cloneable actors.
@@ -90,16 +88,14 @@ where
 
         let (tx, rx) = unbounded::<ChannelMessage<AA>>();
 
+        let mut handlers = Vec::new();
+
         for _ in 0..num {
-            let actor = actor.clone();
-            let rx = rx.clone();
-            spawn_loop(actor, rx);
+            let handler = spawn_loop(actor.clone(), tx.clone(), rx.clone());
+            handlers.push(handler);
         }
 
-        Address {
-            tx,
-            _a: PhantomData,
-        }
+        Address::new(tx, handlers)
     }
 
     fn check_num(num: usize, target: usize) {
@@ -112,112 +108,71 @@ where
 }
 
 // the gut of the event loop of an actor.
-fn spawn_loop<A>(mut actor: A, rx: Receiver<ChannelMessage<A>>)
+fn spawn_loop<A>(
+    actor: A,
+    tx: Sender<ChannelMessage<A>>,
+    rx: Receiver<ChannelMessage<A>>,
+) -> FutureHandler
 where
     A: Actor + Handler + 'static,
     A::Message: Message + Send + 'static,
     <A::Message as Message>::Result: Send,
 {
-    let ctx: ActorContext<A> = ActorContext::new();
+    let mut ctx: ActorContext<A> = ActorContext::new(tx, actor);
 
-    let ctx1 = ctx.clone();
-    runtime::spawn(async move {
+    let fut = async move {
         while let Ok(msg) = rx.recv().await {
             match msg {
-                ChannelMessage::Instant(tx, msg) => ctx1.messages.lock().push_back((tx, msg)),
-                ChannelMessage::Delayed(msg, dur) => {
-                    let messages = Arc::downgrade(&ctx1.messages);
-                    // ToDo: We should add select for this future for canceling.
-                    runtime::spawn(async move {
-                        runtime::delay_for(dur).await;
-                        if let Some(messages) = messages.upgrade() {
-                            messages.lock().push_front((None, msg));
-                        }
-                    })
+                ChannelMessage::Instant(tx, msg) => {
+                    let res = ctx.actor.as_mut().unwrap().handle(msg).await;
+                    if let Some(tx) = tx {
+                        let _ = tx.send(res);
+                    }
                 }
-                ChannelMessage::Interval(tx, interval, dur) => {
-                    // we clone the state of interval future.(Which is SLEEP by default)
-                    let state = interval.state.clone();
-                    ctx1.interval_futures.lock().await.push(interval);
+                ChannelMessage::Delayed(msg, dur) => {
+                    let tx = ctx.tx.clone();
+                    let delayed_handler = spawn_cancelable(Box::pin(async move {
+                        runtime::delay_for(dur).await;
+                        let _ = tx.send(ChannelMessage::Instant(None, msg)).await;
+                    }));
+                    ctx.delayed_handlers.push(delayed_handler);
+                }
+                ChannelMessage::IntervalFuture(idx) => {
+                    if let Some(fut) = ctx.interval_futures.get_mut(idx) {
+                        let act = ctx.actor.take().unwrap_or_else(|| panic!("Actor is gone"));
+                        let act = fut.handle(act).await;
+                        ctx.actor = Some(act);
+                    }
+                }
+                ChannelMessage::Interval(tx, interval_future, dur) => {
+                    // push interval future to context and get it's index
+                    // ToDo: For now we don't have a way to remove the interval future if it's canceled using handler.
+                    ctx.interval_futures.push(interval_future);
+                    let index = ctx.interval_futures.len() - 1;
 
-                    // We spawn a future that check the interval and change the state to ACTIVE.
-                    // We return a handler of said future that can cancel the future.
+                    // construct the interval future
+                    let mut interval = runtime::interval(dur);
+                    let ctx_tx = ctx.tx.clone();
+                    let interval_loop = Box::pin(async move {
+                        loop {
+                            let _ = interval.tick().await;
+                            let _ = ctx_tx.send(ChannelMessage::IntervalFuture(index)).await;
+                        }
+                    });
 
-                    let (mut checker, handler) =
-                        crate::interval::interval_future_handler(state, dur);
-
-                    // checker would poll a stream until the state become SHUT
-                    runtime::spawn(async move { while checker.next().await.is_some() {} });
-
-                    #[cfg(feature = "tokio-runtime")]
-                    #[cfg(not(feature = "async-std-runtime"))]
-                    tokio::task::yield_now().await;
+                    // spawn a cancelable future and use the handler to execute the cancellation.
+                    let handler = spawn_cancelable(interval_loop);
 
                     let _ = tx.send(handler);
                 }
             }
         }
-    });
+    };
 
-    runtime::spawn(async move {
-        'event: loop {
-            if ctx.state.load(Ordering::Relaxed) == SHUT {
-                loop {
-                    let opt = ctx.messages.lock().pop_front();
-                    match opt {
-                        Some((tx, msg)) => {
-                            let res = actor.handle(msg).await;
-                            if let Some(tx) = tx {
-                                let _ = tx.send(res);
-                            }
-                        }
-                        None => break 'event,
-                    }
-                }
-            }
-
-            // handle messages first
-            let opt = ctx.messages.lock().pop_front();
-            if let Some((tx, msg)) = opt {
-                let res = actor.handle(msg).await;
-                if let Some(tx) = tx {
-                    let _ = tx.send(res);
-                }
-            }
-
-            // handle interval futures.
-            let mut should_remove = false;
-
-            {
-                let mut intervals = ctx.interval_futures.lock().await;
-
-                for interval in intervals.iter_mut() {
-                    let state = interval.state.load(Ordering::Acquire);
-                    if state == ACTIVE {
-                        actor = interval.handle(actor).await;
-                        // There is a chance user is canceling the interval right now so we only change the state if it's still ACTIVE
-                        let _ = interval.state.compare_exchange(
-                            ACTIVE,
-                            SLEEP,
-                            Ordering::Relaxed,
-                            Ordering::Relaxed,
-                        );
-                    }
-                    if state == SHUT {
-                        should_remove = true;
-                    }
-                }
-
-                // ToDo: we probably would want to iter and mutate the vector at the same time.
-                if should_remove {
-                    intervals.retain(|interval| interval.state.load(Ordering::Relaxed) != SHUT);
-                }
-            }
-        }
-    });
+    spawn_cancelable(Box::pin(fut))
 }
 
-enum ChannelMessage<A>
+pub(crate) enum ChannelMessage<A>
 where
     A: Actor,
     A::Message: Message,
@@ -227,11 +182,8 @@ where
         A::Message,
     ),
     Delayed(A::Message, Duration),
-    Interval(
-        OneshotSender<IntervalFutureHandler>,
-        IntervalFuture<A>,
-        Duration,
-    ),
+    Interval(OneshotSender<FutureHandler>, IntervalFuture<A>, Duration),
+    IntervalFuture(usize),
 }
 
 #[derive(Debug)]
@@ -256,14 +208,60 @@ where
     }
 }
 
-#[derive(Clone)]
 pub struct Address<A>
 where
-    A: Actor,
+    A: Actor + 'static,
     A::Message: Message,
+    <A::Message as Message>::Result: Send,
 {
     tx: Sender<ChannelMessage<A>>,
+    handlers: Arc<Mutex<Vec<FutureHandler>>>,
     _a: PhantomData<A>,
+}
+
+impl<A> Address<A>
+where
+    A: Actor + 'static,
+    A::Message: Message,
+    <A::Message as Message>::Result: Send,
+{
+    fn new(tx: Sender<ChannelMessage<A>>, handlers: Vec<FutureHandler>) -> Self {
+        Self {
+            tx,
+            handlers: Arc::new(Mutex::new(handlers)),
+            _a: PhantomData,
+        }
+    }
+}
+
+impl<A> Clone for Address<A>
+where
+    A: Actor + 'static,
+    A::Message: Message,
+    <A::Message as Message>::Result: Send,
+{
+    fn clone(&self) -> Self {
+        Self {
+            tx: self.tx.clone(),
+            handlers: self.handlers.clone(),
+            _a: PhantomData,
+        }
+    }
+}
+
+impl<A> Drop for Address<A>
+where
+    A: Actor + 'static,
+    A::Message: Message,
+    <A::Message as Message>::Result: Send,
+{
+    fn drop(&mut self) {
+        if Arc::strong_count(&self.handlers) == 1 {
+            for handler in self.handlers.lock().iter() {
+                handler.cancel();
+            }
+        }
+    }
 }
 
 impl<A> Address<A>
@@ -311,12 +309,12 @@ where
         &self,
         dur: Duration,
         f: F,
-    ) -> Result<IntervalFutureHandler, ActixSendError>
+    ) -> Result<FutureHandler, ActixSendError>
     where
         F: Fn(A) -> Fut + Send + 'static,
         Fut: Future<Output = A> + Send + 'static,
     {
-        let (tx, rx) = channel::<IntervalFutureHandler>();
+        let (tx, rx) = channel::<FutureHandler>();
 
         let object = crate::interval::IntervalFutureContainer(f, PhantomData, PhantomData).pack();
 

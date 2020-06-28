@@ -1,88 +1,8 @@
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-};
-use std::task::{Context, Poll, Waker};
-use std::time::Duration;
-
-use futures::Stream;
-use parking_lot::Mutex;
 
 use crate::actors::Actor;
-use crate::util::constant::{ACTIVE, SHUT, SLEEP};
-use crate::util::runtime;
-
-// helper function to construct stream and handler for IntervalFuture
-pub(crate) fn interval_future_handler(
-    state: Arc<AtomicUsize>,
-    dur: Duration,
-) -> (IntervalFutureStream, IntervalFutureHandler) {
-    let waker = Arc::new(Mutex::new(None));
-
-    let checker = IntervalFutureStream {
-        init: false,
-        state: state.clone(),
-        waker: waker.clone(),
-        interval: runtime::interval(dur),
-    };
-
-    let handler = IntervalFutureHandler { state, waker };
-
-    (checker, handler)
-}
-
-// this is just a checker for the state of interval.
-pub(crate) struct IntervalFutureStream {
-    init: bool,
-    state: Arc<AtomicUsize>,
-    waker: Arc<Mutex<Option<Waker>>>,
-    interval: runtime::Interval,
-}
-
-impl Stream for IntervalFutureStream {
-    type Item = ();
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.get_mut();
-        let state = this.state.load(Ordering::Acquire);
-
-        if state == SHUT {
-            return Poll::Ready(None);
-        }
-
-        if !this.init {
-            let mut waker = this.waker.lock();
-            *waker = Some(cx.waker().clone());
-            this.init = true;
-        }
-
-        match this.interval.poll_tick(cx) {
-            Poll::Ready(_) => {
-                this.state.store(ACTIVE, Ordering::Release);
-                Poll::Ready(Some(()))
-            }
-            Poll::Pending => Poll::Pending,
-        }
-    }
-}
-
-pub struct IntervalFutureHandler {
-    state: Arc<AtomicUsize>,
-    waker: Arc<Mutex<Option<Waker>>>,
-}
-
-impl IntervalFutureHandler {
-    /// Cancel the interval future.
-    pub fn cancel(&self) {
-        self.state.store(SHUT, Ordering::SeqCst);
-        if let Some(waker) = self.waker.lock().take() {
-            waker.wake();
-        }
-    }
-}
 
 /*
     The reason using a trait object for interval async closure is that
@@ -94,7 +14,6 @@ pub(crate) struct IntervalFuture<A>
 where
     A: Actor,
 {
-    pub(crate) state: Arc<AtomicUsize>,
     func: Box<dyn IntervalFutureObj<A> + Send>,
 }
 
@@ -135,7 +54,6 @@ where
 {
     pub(crate) fn pack(self) -> IntervalFuture<A> {
         IntervalFuture {
-            state: Arc::new(AtomicUsize::new(SLEEP)),
             func: Box::new(self),
         }
     }
