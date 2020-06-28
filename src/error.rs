@@ -20,6 +20,7 @@ impl<A> From<SendError<ChannelMessage<A>>> for ActixSendError
 where
     A: Actor,
     A::Message: Message,
+    <A::Message as Message>::Result: Send,
 {
     fn from(_err: SendError<ChannelMessage<A>>) -> Self {
         ActixSendError::Closed

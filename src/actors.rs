@@ -9,6 +9,7 @@ use parking_lot::Mutex;
 
 use crate::context::{spawn_loop, ChannelMessage};
 use crate::error::ActixSendError;
+use crate::interval::IntervalFutureSet;
 use crate::util::{future_handle::FutureHandler, runtime};
 
 pub struct Builder<A>
@@ -41,13 +42,20 @@ where
 
         let mut handlers = Vec::new();
 
+        let interval_futures = IntervalFutureSet::new();
+
         if num > 1 {
             for _ in 0..num {
-                let handler = spawn_loop(self.actor.clone(), tx.clone(), rx.clone());
+                let handler = spawn_loop(
+                    self.actor.clone(),
+                    tx.clone(),
+                    rx.clone(),
+                    interval_futures.clone(),
+                );
                 handlers.push(handler);
             }
         } else {
-            let handler = spawn_loop(self.actor, tx.clone(), rx);
+            let handler = spawn_loop(self.actor, tx.clone(), rx, interval_futures);
             handlers.push(handler);
         }
 
@@ -70,7 +78,7 @@ where
     <A::Message as Message>::Result: Send,
 {
     tx: Sender<ChannelMessage<A>>,
-    handlers: Arc<Mutex<Vec<FutureHandler>>>,
+    handlers: Arc<Mutex<Vec<FutureHandler<A>>>>,
     _a: PhantomData<A>,
 }
 
@@ -80,7 +88,7 @@ where
     A::Message: Message,
     <A::Message as Message>::Result: Send,
 {
-    fn new(tx: Sender<ChannelMessage<A>>, handlers: Vec<FutureHandler>) -> Self {
+    fn new(tx: Sender<ChannelMessage<A>>, handlers: Vec<FutureHandler<A>>) -> Self {
         Self {
             tx,
             handlers: Arc::new(Mutex::new(handlers)),
@@ -164,12 +172,12 @@ where
         &self,
         dur: Duration,
         f: F,
-    ) -> Result<FutureHandler, ActixSendError>
+    ) -> Result<FutureHandler<A>, ActixSendError>
     where
         F: Fn(A) -> Fut + Send + 'static,
         Fut: Future<Output = A> + Send + 'static,
     {
-        let (tx, rx) = channel::<FutureHandler>();
+        let (tx, rx) = channel::<FutureHandler<A>>();
 
         let object = crate::interval::IntervalFutureContainer(f, PhantomData, PhantomData).pack();
 

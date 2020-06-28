@@ -1,17 +1,25 @@
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::task::{Context, Poll, Waker};
 
+use async_channel::Sender;
+use futures::future::Either;
 use parking_lot::Mutex;
 
+use crate::actors::{Actor, Message};
+use crate::context::ChannelMessage;
 use crate::util::runtime;
-use futures::future::Either;
 
 // helper function for spawn a future on runtime and return a handler that can cancel it.
-pub(crate) fn spawn_cancelable<F, FN>(f: F, cancel_now: bool, on_cancel: FN) -> FutureHandler
+pub(crate) fn spawn_cancelable<F, FN, A>(f: F, cancel_now: bool, on_cancel: FN) -> FutureHandler<A>
 where
+    A: Actor,
+    A::Message: Message,
+    <A::Message as Message>::Result: Send,
     F: Future + Unpin + Send + 'static,
     <F as Future>::Output: Send,
     FN: Fn() + Send + 'static,
@@ -37,7 +45,11 @@ where
         }
     });
 
-    FutureHandler { state, waker }
+    FutureHandler {
+        state,
+        waker,
+        tx: None,
+    }
 }
 
 // a future notified and polled by future_handler.
@@ -67,17 +79,40 @@ impl Future for FinisherFuture {
     }
 }
 
-pub struct FutureHandler {
+pub struct FutureHandler<A>
+where
+    A: Actor,
+    A::Message: Message,
+    <A::Message as Message>::Result: Send,
+{
     state: Arc<AtomicBool>,
     waker: Arc<Mutex<Option<Waker>>>,
+    tx: Option<(usize, Sender<ChannelMessage<A>>)>,
 }
 
-impl FutureHandler {
+impl<A> FutureHandler<A>
+where
+    A: Actor + 'static,
+    A::Message: Message,
+    <A::Message as Message>::Result: Send,
+{
     /// Cancel the future.
     pub fn cancel(&self) {
         self.state.store(false, Ordering::SeqCst);
         if let Some(waker) = self.waker.lock().take() {
             waker.wake();
         }
+        // We remove the interval future with index as key.
+        if let Some((index, tx)) = self.tx.as_ref() {
+            let tx = tx.clone();
+            let index = *index;
+            runtime::spawn(async move {
+                let _ = tx.send(ChannelMessage::IntervalFutureRemove(index)).await;
+            });
+        }
+    }
+
+    pub(crate) fn attach_tx(&mut self, index: usize, tx: Sender<ChannelMessage<A>>) {
+        self.tx = Some((index, tx));
     }
 }
