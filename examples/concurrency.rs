@@ -7,7 +7,7 @@ use std::thread::ThreadId;
 
 use actix_send::prelude::*;
 
-use crate::cloneable_actor::NonSharedActor;
+use crate::non_shared_actor::NonSharedActor;
 use crate::shared_actor::{Message2, Message2Res, SharedActor};
 
 #[actor_mod]
@@ -70,7 +70,7 @@ pub mod shared_actor {
 }
 
 #[actor_mod]
-pub mod cloneable_actor {
+pub mod non_shared_actor {
     use super::*;
 
     // Actor must be a type that can impl with Copy and/or Clone
@@ -103,7 +103,7 @@ async fn main() {
 
     // send messages
     for _i in 0..1_000 {
-        // Both shared_actor and cloneable_actor have the same type Message1
+        // Both shared_actor and non_shared_actor have the same type Message1
         // and we can specific call the one we want with a type path.
         let _: u8 = address.send(shared_actor::Message1).await.unwrap();
     }
@@ -121,11 +121,11 @@ async fn main() {
 
     // send messages
     for _i in 0..1_000 {
-        // Both shared_actor and cloneable_actor have the same type Message1
+        // Both shared_actor and non_shared_actor have the same type Message1
         // and we can specific call the one we want with a type path.
-        let _: usize = address2.send(cloneable_actor::Message1).await.unwrap();
+        let _: usize = address2.send(non_shared_actor::Message1).await.unwrap();
     }
 
-    let state: usize = address2.send(cloneable_actor::Message1).await.unwrap();
+    let state: usize = address2.send(non_shared_actor::Message1).await.unwrap();
     println!("State is: {}, should be smaller than 1000", state);
 }

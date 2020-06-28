@@ -6,10 +6,9 @@ macro_rules! spawn {
         $spawn_fn: path,
         $delay_fn: path,
         $interval_fn: path,
-        $interval_ty: path
+        $interval_ty: path,
+        $tick_fn: ident
     ) => {
-        pub(crate) type Interval = $interval_ty;
-
         pub(crate) fn spawn<Fut>(f: Fut)
         where
             Fut: Future + Send + 'static,
@@ -22,8 +21,12 @@ macro_rules! spawn {
             let _ = $delay_fn(dur).await;
         }
 
-        pub(crate) fn interval(dur: Duration) -> Interval {
+        pub(crate) fn interval(dur: Duration) -> $interval_ty {
             $interval_fn(dur)
+        }
+
+        pub(crate) async fn tick(interval: &mut $interval_ty) {
+            let _ = interval.$tick_fn().await;
         }
     };
 }
@@ -34,9 +37,20 @@ spawn!(
     tokio::spawn,
     tokio::time::delay_for,
     tokio::time::interval,
-    tokio::time::Interval
+    tokio::time::Interval,
+    tick
 );
 
 #[cfg(feature = "async-std-runtime")]
 #[cfg(not(feature = "tokio-runtime"))]
-spawn!(async_std::task::spawn, async_std::task::sleep);
+spawn!(
+    async_std::task::spawn,
+    async_std::task::sleep,
+    async_std::stream::interval,
+    async_std::stream::Interval,
+    next
+);
+
+#[cfg(feature = "async-std-runtime")]
+#[cfg(not(feature = "tokio-runtime"))]
+use futures::StreamExt;

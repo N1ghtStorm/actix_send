@@ -38,7 +38,7 @@ async fn main() {
     let handler = address
         .run_interval(Duration::from_secs(1), |actor| async {
             // unfortunately it's hard to access a reference from an async closure.
-            // So every interval future would take ownership of the actor and return it in the end
+            // So every interval future would take ownership of the actor and return it at the end
             println!("actor state is: {}", &actor.state1);
 
             actor
@@ -50,7 +50,7 @@ async fn main() {
 
     for i in 0..5 {
         if i == 3 {
-            // cancel the interval future after 5 seconds.
+            // cancel the interval future after 3 seconds.
             handler.cancel();
             println!("interval future stopped");
         }

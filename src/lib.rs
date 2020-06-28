@@ -71,11 +71,13 @@
 
 pub(crate) mod actors;
 pub(crate) mod context;
+pub(crate) mod error;
 pub(crate) mod interval;
 pub(crate) mod util;
 
 pub mod prelude {
-    pub use crate::actors::{ActixSendError, Actor, Address, Handler, Message};
+    pub use crate::actors::{Actor, Address, Handler, Message};
+    pub use crate::error::ActixSendError;
     pub use actix_send_macros::*;
     pub use async_trait::async_trait;
 }

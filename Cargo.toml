@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["fakeshadow <24548779@qq.com>"]
 edition = "2018"
 exclude = ["examples/*"]
+readme = "README.md"
 
 [lib]
 name = "actix_send"
@@ -31,10 +32,10 @@ async-std-runtime = ["async-std"]
 actix_send_macros = { path = "./actix-send-macros" }
 async-channel = "1.1.0"
 async-trait = "0.1.35"
-futures = "0.3.5"
+futures = { version = "0.3.5", default-features = false, features = ["alloc"] }
 parking_lot = "0.11.0"
 
-async-std = { version = "1.6.1", optional = true }
+async-std = { version = "1.6.1", optional = true, default-features = false }
 tokio = { version = "0.2.21", optional = true, default-features = false }
 
 [dev-dependencies]
