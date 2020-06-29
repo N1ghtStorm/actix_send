@@ -120,6 +120,8 @@ where
                     // we attach the index of interval future and a tx of our channel to handler.
                     handler.attach_tx(index, ctx.tx.clone());
 
+                    ctx.delayed_handlers.push(handler.clone());
+
                     let _ = tx.send(handler);
                 }
             }

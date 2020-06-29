@@ -112,7 +112,6 @@ pub fn actor(_meta: TokenStream, input: TokenStream) -> TokenStream {
             }
 
             let ident = struct_item.ident.clone();
-            let vis = struct_item.vis.clone();
 
             let message_ident_string = format!("{}Message", ident.to_string());
             let message_ident = Ident::new(message_ident_string.as_str(), Span::call_site());
@@ -129,12 +128,6 @@ pub fn actor(_meta: TokenStream, input: TokenStream) -> TokenStream {
                     impl #impl_gen #ident #impl_ty
                     #impl_where
                     {
-                        #vis fn create<F>(f: F) -> #ident
-                        where
-                            F: FnOnce() -> #ident,
-                        {
-                            f()
-                        }
                     }
 
                     impl #impl_gen Actor for #ident #impl_ty

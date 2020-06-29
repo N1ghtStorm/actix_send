@@ -70,13 +70,15 @@
 //! | `async-std-runtime` | Enable support for the `async-std` crate. | [async-std](https://crates.io/crates/async-std)<br>[tokio](https://crates.io/crates/tokio) with `sync` feature | no |
 
 pub(crate) mod actors;
+pub(crate) mod address;
 pub(crate) mod context;
 pub(crate) mod error;
 pub(crate) mod interval;
 pub(crate) mod util;
 
 pub mod prelude {
-    pub use crate::actors::{Actor, Address, Handler, MapResult};
+    pub use crate::actors::{Actor, Handler};
+    pub use crate::address::{Address, MapResult};
     pub use crate::error::ActixSendError;
     pub use actix_send_macros::*;
     pub use async_trait::async_trait;

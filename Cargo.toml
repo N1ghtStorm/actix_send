@@ -23,6 +23,10 @@ path = "examples/basic.rs"
 name = "concurrency"
 path = "examples/concurrency.rs"
 
+[[example]]
+name = "no_macro"
+path = "examples/no_macro.rs"
+
 [features]
 default = ["tokio-runtime"]
 tokio-runtime = ["tokio/rt-threaded", "tokio/sync", "tokio/time"]
@@ -40,4 +44,4 @@ tokio = { version = "0.2.21", optional = true, default-features = false }
 
 [dev-dependencies]
 tokio = { version = "0.2.21", features = ["full"] }
-async-std = { version = "1.6.1", features = ["unstable"] }
+async-std = { version = "1.6.2", features = ["unstable"] }

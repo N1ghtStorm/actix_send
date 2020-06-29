@@ -90,6 +90,21 @@ where
     tx: Option<(usize, Sender<ChannelMessage<A>>)>,
 }
 
+impl<A> Clone for FutureHandler<A>
+where
+    A: Actor,
+    A::Message: Send,
+    A::Result: Send,
+{
+    fn clone(&self) -> Self {
+        Self {
+            state: self.state.clone(),
+            waker: self.waker.clone(),
+            tx: self.tx.as_ref().map(|(idx, sender)| (*idx, sender.clone())),
+        }
+    }
+}
+
 impl<A> FutureHandler<A>
 where
     A: Actor + 'static,
