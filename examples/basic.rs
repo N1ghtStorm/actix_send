@@ -21,8 +21,8 @@ async fn main() {
     let msg3 = Message3;
 
     // use address to send messages to actor and await on result.
-    // We need infer our type here. and the type should be the message's result type in #[message] macro
 
+    // send method would return the message's result type in #[message] macro together with a possible actix_send::prelude::ActixSendError
     let res: Result<u8, ActixSendError> = address.send(msg).await;
     let res = res.unwrap();
 
@@ -32,7 +32,7 @@ async fn main() {
 
     println!("We got result for Message1\r\nResult is: {}\r\n", res);
     println!("We got result for Message2\r\nResult is: {}\r\n", res2);
-    println!("We got result for Message3\r\nResult is: {}\r\n", res3);
+    println!("We got result for Message3\r\nResult is: {:?}\r\n", res3);
 
     // register an interval future for actor with given duration.
     let handler = address
@@ -75,7 +75,7 @@ pub mod my_actor {
         pub state2: String,
     }
 
-    // we have multiple type of messages
+    // message types
 
     #[message(result = "u8")]
     pub struct Message1 {
@@ -85,7 +85,7 @@ pub mod my_actor {
     #[message(result = "u16")]
     pub struct Message2(pub u32);
 
-    #[message(result = "u16")]
+    #[message(result = "()")]
     pub struct Message3;
 
     // we impl handler trait for all message types
@@ -112,9 +112,8 @@ pub mod my_actor {
 
     #[handler]
     impl Handler for MyActor {
-        async fn handle(&mut self, _msg: Message3) -> u16 {
+        async fn handle(&mut self, _msg: Message3) {
             println!("We got an Message3.\r\n");
-            1616
         }
     }
 }

@@ -8,7 +8,7 @@ use std::thread::ThreadId;
 use actix_send::prelude::*;
 
 use crate::non_shared_actor::NonSharedActor;
-use crate::shared_actor::{Message2, Message2Res, SharedActor};
+use crate::shared_actor::{Message2, SharedActor};
 
 #[actor_mod]
 pub mod shared_actor {
@@ -108,7 +108,7 @@ async fn main() {
         let _ = address.send(shared_actor::Message1).await.unwrap();
     }
 
-    let info: Vec<Message2Res> = address.send(Message2).await.unwrap();
+    let info = address.send(Message2).await.unwrap();
 
     for i in info.into_iter() {
         println!("{:?}\r\nhandled {} messages\r\n", i.thread_id, i.count);

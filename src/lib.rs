@@ -76,7 +76,7 @@ pub(crate) mod interval;
 pub(crate) mod util;
 
 pub mod prelude {
-    pub use crate::actors::{Actor, Address, Handler, MapResult, Message};
+    pub use crate::actors::{Actor, Address, Handler, MapResult};
     pub use crate::error::ActixSendError;
     pub use actix_send_macros::*;
     pub use async_trait::async_trait;

@@ -23,8 +23,8 @@ where
 impl<A> Builder<A>
 where
     A: Actor + Handler + Clone + 'static,
-    A::Message: Message + Send + 'static,
-    <A::Message as Message>::Result: Send,
+    A::Message: Send + 'static,
+    A::Result: Send,
 {
     /// Build multiple actors with the num passed.
     ///
@@ -74,8 +74,8 @@ where
 pub struct Address<A>
 where
     A: Actor + 'static,
-    A::Message: Message,
-    <A::Message as Message>::Result: Send,
+    A::Message: Send,
+    A::Result: Send,
 {
     tx: Sender<ChannelMessage<A>>,
     handlers: Arc<Mutex<Vec<FutureHandler<A>>>>,
@@ -85,8 +85,8 @@ where
 impl<A> Address<A>
 where
     A: Actor + 'static,
-    A::Message: Message,
-    <A::Message as Message>::Result: Send,
+    A::Message: Send,
+    A::Result: Send,
 {
     fn new(tx: Sender<ChannelMessage<A>>, handlers: Vec<FutureHandler<A>>) -> Self {
         Self {
@@ -100,8 +100,8 @@ where
 impl<A> Clone for Address<A>
 where
     A: Actor + 'static,
-    A::Message: Message,
-    <A::Message as Message>::Result: Send,
+    A::Message: Send,
+    A::Result: Send,
 {
     fn clone(&self) -> Self {
         Self {
@@ -115,8 +115,8 @@ where
 impl<A> Drop for Address<A>
 where
     A: Actor + 'static,
-    A::Message: Message,
-    <A::Message as Message>::Result: Send,
+    A::Message: Send,
+    A::Result: Send,
 {
     fn drop(&mut self) {
         if Arc::strong_count(&self.handlers) == 1 {
@@ -130,21 +130,21 @@ where
 impl<A> Address<A>
 where
     A: Actor + 'static,
-    A::Message: Message,
-    <A::Message as Message>::Result: Send,
+    A::Message: Send,
+    A::Result: Send,
 {
-    /// Type `R` is the same as Message's result type in `#[message]` macro
+    /// Send a message to actor and await for result.
     ///
     /// Message will be returned in `ActixSendError::Closed(Message)` if the actor is already closed.
     #[must_use = "futures do nothing unless you `.await` or poll them"]
     pub async fn send<M>(
         &self,
         msg: M,
-    ) -> Result<<M as MapResult<<A::Message as Message>::Result>>::Output, ActixSendError>
+    ) -> Result<<M as MapResult<A::Result>>::Output, ActixSendError>
     where
-        M: Into<A::Message> + MapResult<<A::Message as Message>::Result>,
+        M: Into<A::Message> + MapResult<A::Result>,
     {
-        let (tx, rx) = channel::<<A::Message as Message>::Result>();
+        let (tx, rx) = channel::<A::Result>();
 
         let channel_message = ChannelMessage::Instant(Some(tx), msg.into());
 
@@ -161,15 +161,18 @@ where
         self._do_send(msg);
     }
 
-    /// run a message after a certain amount of delay.
+    /// Run a message after a certain amount of delay.
     pub fn run_later(&self, msg: impl Into<A::Message> + Send + 'static, delay: Duration) {
         let msg = ChannelMessage::Delayed(msg.into(), delay);
         self._do_send(msg);
     }
 
-    /// register an interval future for actor. An actor can have multiple interval futures registered.
+    /// Register an interval future for actor. An actor can have multiple interval futures registered.
     ///
     /// a `FutureHandler` would return that can be used to cancel it.
+    ///
+    /// *. For now dropping the `FutureHandler` would do nothing and the interval future would last as long as the runtime.
+    // ToDo: Pass FutureHandler to context and cancel the intervals when dropping.
     #[must_use = "futures do nothing unless you `.await` or poll them"]
     pub async fn run_interval<F, Fut>(
         &self,
@@ -211,6 +214,7 @@ where
     Self: Sized + Send,
 {
     type Message;
+    type Result;
 
     fn build(self) -> Builder<Self> {
         Builder {
@@ -220,18 +224,12 @@ where
     }
 }
 
-// ToDo: Do we still need a message trait?. Message is already an associate type of Actor we can move Result type to Actor as well.
-pub trait Message: Send {
-    type Result;
-}
-
 #[async_trait::async_trait]
 pub trait Handler
 where
     Self: Actor,
-    <Self as Actor>::Message: Message,
 {
-    async fn handle(&mut self, msg: Self::Message) -> <Self::Message as Message>::Result;
+    async fn handle(&mut self, msg: Self::Message) -> Self::Result;
 }
 
 #[cfg(feature = "tokio-runtime")]

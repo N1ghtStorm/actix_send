@@ -10,7 +10,7 @@ use async_channel::Sender;
 use futures::future::Either;
 use parking_lot::Mutex;
 
-use crate::actors::{Actor, Message};
+use crate::actors::Actor;
 use crate::context::ChannelMessage;
 use crate::util::runtime;
 
@@ -18,8 +18,8 @@ use crate::util::runtime;
 pub(crate) fn spawn_cancelable<F, FN, A>(f: F, cancel_now: bool, on_cancel: FN) -> FutureHandler<A>
 where
     A: Actor,
-    A::Message: Message,
-    <A::Message as Message>::Result: Send,
+    A::Message: Send,
+    A::Result: Send,
     F: Future + Unpin + Send + 'static,
     <F as Future>::Output: Send,
     FN: Fn() + Send + 'static,
@@ -82,8 +82,8 @@ impl Future for FinisherFuture {
 pub struct FutureHandler<A>
 where
     A: Actor,
-    A::Message: Message,
-    <A::Message as Message>::Result: Send,
+    A::Message: Send,
+    A::Result: Send,
 {
     state: Arc<AtomicBool>,
     waker: Arc<Mutex<Option<Waker>>>,
@@ -93,8 +93,8 @@ where
 impl<A> FutureHandler<A>
 where
     A: Actor + 'static,
-    A::Message: Message,
-    <A::Message as Message>::Result: Send,
+    A::Message: Send,
+    A::Result: Send,
 {
     /// Cancel the future.
     pub fn cancel(&self) {

@@ -117,6 +117,9 @@ pub fn actor(_meta: TokenStream, input: TokenStream) -> TokenStream {
             let message_ident_string = format!("{}Message", ident.to_string());
             let message_ident = Ident::new(message_ident_string.as_str(), Span::call_site());
 
+            let result_ident_string = format!("{}Result", ident.to_string());
+            let result_ident = Ident::new(result_ident_string.as_str(), Span::call_site());
+
             let (impl_gen, impl_ty, impl_where) = struct_item.generics.split_for_impl();
 
             // impl Actor trait for struct;
@@ -138,6 +141,7 @@ pub fn actor(_meta: TokenStream, input: TokenStream) -> TokenStream {
                     #impl_where
                     {
                         type Message = #message_ident;
+                        type Result = #result_ident;
                     }
             };
 
@@ -195,32 +199,6 @@ pub fn handler(_meta: TokenStream, input: TokenStream) -> TokenStream {
                 impl_item.attrs.push(async_trait_attr);
             }
 
-            // add message's type to Handler trait
-            let _ = impl_item
-                .trait_
-                .iter_mut()
-                .map(|(_, path, _)| {
-                    let path_seg = path
-                        .segments
-                        .first_mut()
-                        .map(|path_seg| {
-                            if path_seg.ident.to_string().as_str() != "Handler" {
-                                panic!("Handler trait is not presented");
-                            }
-                            path_seg
-                        })
-                        .expect("Handler trait has not PathSegment");
-
-                    let args = AngleBracketedGenericArguments {
-                        colon2_token: None,
-                        lt_token: Default::default(),
-                        args: Default::default(),
-                        gt_token: Default::default(),
-                    };
-                    path_seg.arguments = PathArguments::AngleBracketed(args)
-                })
-                .collect::<()>();
-
             let expended = quote! { #impl_item };
 
             expended.into()
@@ -251,7 +229,7 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                     // before we throw them we collect all the type, field and message's return type
                     // attributes other than message are collected as well.
                     if let Some(attr) = is_ident(&struct_item.attrs, "message") {
-                        let test = attr
+                        let mut test: String = attr
                             .tokens
                             .to_string()
                             .split('=')
@@ -259,8 +237,10 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                             .pop()
                             .expect("#[message(result = \"T\")] is missing")
                             .chars()
-                            .filter(|char| char != &'\"' && char != &')' && char != &' ')
-                            .collect::<String>();
+                            .filter(|char| char != &'\"' && char != &' ')
+                            .collect();
+
+                        test.pop();
 
                         let result_typ = syn::parse_str::<syn::Type>(&test)
                             .unwrap_or_else(|_| panic!("Failed parsing string: {} to type", test));
@@ -588,33 +568,8 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                 items.push(impl_item2);
             }
 
-            // We should impl Message trait for the message_enum
-            // ToDo: We should make message trait impl a single function for both this macro and message macro
-            let message_trait_impl = ItemImpl {
-                attrs: vec![],
-                defaultness: None,
-                unsafety: None,
-                impl_token: Default::default(),
-                generics: Default::default(),
-                trait_: Some((None, path_from_ident_str("Message"), Default::default())),
-                self_ty: Box::new(message_enum_type.clone()),
-                brace_token: Default::default(),
-                items: vec![ImplItem::Type(ImplItemType {
-                    attrs: vec![],
-                    vis: Visibility::Inherited,
-                    defaultness: None,
-                    type_token: Default::default(),
-                    ident: Ident::new("Result", Span::call_site()),
-                    generics: Default::default(),
-                    eq_token: Default::default(),
-                    ty: Type::Path(type_path_from_idents(vec![result_enum_ident.clone()])),
-                    semi_token: Default::default(),
-                })],
-            };
-
             items.push(Item::Enum(message_enum));
             items.push(Item::Enum(result_enum));
-            items.push(Item::Impl(message_trait_impl));
 
             let handle_methods = items
                 .iter()

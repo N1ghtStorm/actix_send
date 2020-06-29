@@ -3,7 +3,7 @@ use std::time::Duration;
 use async_channel::{Receiver, Sender};
 use futures::channel::oneshot::Sender as OneshotSender;
 
-use crate::actors::{Actor, Handler, Message};
+use crate::actors::{Actor, Handler};
 use crate::interval::{IntervalFuture, IntervalFutureSet};
 use crate::util::future_handle::{spawn_cancelable, FutureHandler};
 use crate::util::runtime;
@@ -11,8 +11,8 @@ use crate::util::runtime;
 pub(crate) struct ActorContext<A>
 where
     A: Actor + Send + 'static,
-    A::Message: Message + Send,
-    <A::Message as Message>::Result: Send,
+    A::Message: Send,
+    A::Result: Send,
 {
     pub(crate) tx: Sender<ChannelMessage<A>>,
     pub(crate) actor: Option<A>,
@@ -23,8 +23,8 @@ where
 impl<A> ActorContext<A>
 where
     A: Actor + Send,
-    A::Message: Message + Send,
-    <A::Message as Message>::Result: Send,
+    A::Message: Send,
+    A::Result: Send,
 {
     pub(crate) fn new(
         tx: Sender<ChannelMessage<A>>,
@@ -44,8 +44,8 @@ where
 impl<A> Drop for ActorContext<A>
 where
     A: Actor + Send + 'static,
-    A::Message: Message + Send,
-    <A::Message as Message>::Result: Send,
+    A::Message: Send,
+    A::Result: Send,
 {
     fn drop(&mut self) {
         for handler in self.delayed_handlers.iter() {
@@ -63,8 +63,8 @@ pub(crate) fn spawn_loop<A>(
 ) -> FutureHandler<A>
 where
     A: Actor + Handler + 'static,
-    A::Message: Message + Send + 'static,
-    <A::Message as Message>::Result: Send,
+    A::Message: Send + 'static,
+    A::Result: Send,
 {
     let mut ctx: ActorContext<A> = ActorContext::new(tx, actor, interval_futures);
 
@@ -133,13 +133,10 @@ where
 pub(crate) enum ChannelMessage<A>
 where
     A: Actor,
-    A::Message: Message,
-    <A::Message as Message>::Result: Send,
+    A::Message: Send,
+    A::Result: Send,
 {
-    Instant(
-        Option<OneshotSender<<A::Message as Message>::Result>>,
-        A::Message,
-    ),
+    Instant(Option<OneshotSender<A::Result>>, A::Message),
     Delayed(A::Message, Duration),
     Interval(OneshotSender<FutureHandler<A>>, IntervalFuture<A>, Duration),
     IntervalFuture(usize),
