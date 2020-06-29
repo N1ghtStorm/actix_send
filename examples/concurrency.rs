@@ -105,7 +105,7 @@ async fn main() {
     for _i in 0..1_000 {
         // Both shared_actor and non_shared_actor have the same type Message1
         // and we can specific call the one we want with a type path.
-        let _: u8 = address.send(shared_actor::Message1).await.unwrap();
+        let _ = address.send(shared_actor::Message1).await.unwrap();
     }
 
     let info: Vec<Message2Res> = address.send(Message2).await.unwrap();
@@ -123,9 +123,9 @@ async fn main() {
     for _i in 0..1_000 {
         // Both shared_actor and non_shared_actor have the same type Message1
         // and we can specific call the one we want with a type path.
-        let _: usize = address2.send(non_shared_actor::Message1).await.unwrap();
+        let _ = address2.send(non_shared_actor::Message1).await.unwrap();
     }
 
-    let state: usize = address2.send(non_shared_actor::Message1).await.unwrap();
+    let state = address2.send(non_shared_actor::Message1).await.unwrap();
     println!("State is: {}, should be smaller than 1000", state);
 }

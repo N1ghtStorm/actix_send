@@ -137,9 +137,12 @@ where
     ///
     /// Message will be returned in `ActixSendError::Closed(Message)` if the actor is already closed.
     #[must_use = "futures do nothing unless you `.await` or poll them"]
-    pub async fn send<R>(&self, msg: impl Into<A::Message>) -> Result<R, ActixSendError>
+    pub async fn send<M>(
+        &self,
+        msg: M,
+    ) -> Result<<M as MapResult<<A::Message as Message>::Result>>::Output, ActixSendError>
     where
-        R: From<<A::Message as Message>::Result>,
+        M: Into<A::Message> + MapResult<<A::Message as Message>::Result>,
     {
         let (tx, rx) = channel::<<A::Message as Message>::Result>();
 
@@ -149,7 +152,7 @@ where
 
         let res = rx.await?;
 
-        Ok(From::from(res))
+        Ok(M::map(res))
     }
 
     /// Send a message to actor and ignore the result.
@@ -194,6 +197,13 @@ where
             let _ = this.send(msg).await;
         });
     }
+}
+
+// a helper trait for map result of original messages.
+// M here is auto generated ActorResult from #[actor_mod] macro.
+pub trait MapResult<M>: Sized {
+    type Output;
+    fn map(msg: M) -> Self::Output;
 }
 
 pub trait Actor
@@ -284,9 +294,9 @@ pub mod test_actor {
         let msg2 = DummyMessage2(1, 2);
 
         // use address to send message object to actor and await on result.
-        let res: u8 = address.send(msg).await.unwrap();
+        let res = address.send(msg).await.unwrap();
 
-        let res2: u16 = address.send(msg2).await.unwrap();
+        let res2 = address.send(msg2).await.unwrap();
 
         assert_eq!(res, 8);
         assert_eq!(res2, 16);

@@ -28,7 +28,7 @@
 //!
 //!     // use address to send messages to actor and await on result.
 //!     // We need infer our type here. and the type should be the message's result type in #[message] macro
-//!     let res: Result<u8, ActixSendError> = address.send(msg).await;
+//!     let res = address.send(msg).await;
 //!     println!("We got result for Message1\r\nResult is: {:?}", res);
 //! }
 //!
@@ -76,7 +76,7 @@ pub(crate) mod interval;
 pub(crate) mod util;
 
 pub mod prelude {
-    pub use crate::actors::{Actor, Address, Handler, Message};
+    pub use crate::actors::{Actor, Address, Handler, MapResult, Message};
     pub use crate::error::ActixSendError;
     pub use actix_send_macros::*;
     pub use async_trait::async_trait;

@@ -387,7 +387,7 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                     message_enum_type.clone(),
                 );
 
-                // impl From<ActorResult> for Message::Result
+                // impl actix_send::ParseResult<ActorResult> for original Message::Result(before transformed to enum)
                 let result_enum_type =
                     Type::Path(type_path_from_idents(vec![result_enum_ident.clone()]));
 
@@ -407,7 +407,7 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                     .push(GenericArgument::Type(result_enum_type.clone()));
 
                 path.segments.push(PathSegment {
-                    ident: Ident::new("From", Span::call_site()),
+                    ident: Ident::new("MapResult", Span::call_site()),
                     arguments: PathArguments::AngleBracketed(bracket),
                 });
 
@@ -518,12 +518,18 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                         unsafety: None,
                         abi: None,
                         fn_token: Default::default(),
-                        ident: Ident::new("from", Span::call_site()),
+                        ident: Ident::new("map", Span::call_site()),
                         generics: Default::default(),
                         paren_token: Default::default(),
                         inputs: Default::default(),
                         variadic: None,
-                        output: ReturnType::Type(Default::default(), Box::new(result_type.clone())),
+                        output: ReturnType::Type(
+                            Default::default(),
+                            Box::new(Type::Path(type_path_from_idents(vec![
+                                Ident::new("Self", Span::call_site()),
+                                Ident::new("Output", Span::call_site()),
+                            ]))),
+                        ),
                     },
                     block: Block {
                         brace_token: Default::default(),
@@ -554,6 +560,18 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                     ty: Box::new(result_enum_type.clone()),
                 }));
 
+                let impl_type = ImplItemType {
+                    attrs: vec![],
+                    vis: Visibility::Inherited,
+                    defaultness: None,
+                    type_token: Default::default(),
+                    ident: Ident::new("Output", Span::call_site()),
+                    generics: Default::default(),
+                    eq_token: Default::default(),
+                    ty: result_type,
+                    semi_token: Default::default(),
+                };
+
                 let impl_item2 = Item::Impl(ItemImpl {
                     attrs: vec![],
                     defaultness: None,
@@ -561,9 +579,9 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                     impl_token: Default::default(),
                     generics: Default::default(),
                     trait_: Some((None, path, Default::default())),
-                    self_ty: Box::new(result_type.clone()),
+                    self_ty: Box::new(Type::Path(message_type_path.clone())),
                     brace_token: Default::default(),
-                    items: vec![ImplItem::Method(method)],
+                    items: vec![ImplItem::Type(impl_type), ImplItem::Method(method)],
                 });
 
                 items.push(impl_item);

@@ -26,13 +26,13 @@ async fn main() {
     let res: Result<u8, ActixSendError> = address.send(msg).await;
     let res = res.unwrap();
 
-    let res2: u16 = address.send(msg2).await.unwrap();
+    let res2 = address.send(msg2).await.unwrap();
 
-    let res3: WrapperU16 = address.send(msg3).await.unwrap();
+    let res3 = address.send(msg3).await.unwrap();
 
     println!("We got result for Message1\r\nResult is: {}\r\n", res);
     println!("We got result for Message2\r\nResult is: {}\r\n", res2);
-    println!("We got result for Message3\r\nResult is: {}\r\n", res3.0);
+    println!("We got result for Message3\r\nResult is: {}\r\n", res3);
 
     // register an interval future for actor with given duration.
     let handler = address
@@ -85,6 +85,9 @@ pub mod my_actor {
     #[message(result = "u16")]
     pub struct Message2(pub u32);
 
+    #[message(result = "u16")]
+    pub struct Message3;
+
     // we impl handler trait for all message types
     // The compiler would complain if there are message types don't have an according Handler trait impl.
 
@@ -92,8 +95,8 @@ pub mod my_actor {
     impl Handler for MyActor {
         // The msg and handle's return type must match former message macro's result type.
         async fn handle(&mut self, msg: Message1) -> u8 {
-            // println!("Actor State1 : {}", self.state1);
-            // println!("We got an Message1.\r\nfrom : {}\r\n", msg.from);
+            println!("Actor State1 : {}", self.state1);
+            println!("We got an Message1.\r\nfrom : {}\r\n", msg.from);
             8
         }
     }
@@ -107,27 +110,11 @@ pub mod my_actor {
         }
     }
 
-    /*
-       One of the biggest limitation of this crate for now is when using multiple messages for an actor.
-
-       The result type of every message MUST be different from one another.
-
-       If you have different messages return the same type of data the macro would simply fail to generate correct code.
-
-       You can use a wrapper type to contain the same result type. As long as the outer type is different then the macro will work.
-    */
-
-    // Since we can't return u16 as result again we wrap it in another type.
-    #[message(result = "WrapperU16")]
-    pub struct Message3;
-
-    pub struct WrapperU16(pub u16);
-
     #[handler]
     impl Handler for MyActor {
-        async fn handle(&mut self, _msg: Message3) -> WrapperU16 {
+        async fn handle(&mut self, _msg: Message3) -> u16 {
             println!("We got an Message3.\r\n");
-            WrapperU16(1616)
+            1616
         }
     }
 }
