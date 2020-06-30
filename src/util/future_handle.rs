@@ -18,8 +18,6 @@ use crate::util::runtime;
 pub(crate) fn spawn_cancelable<F, FN, A>(f: F, cancel_now: bool, on_cancel: FN) -> FutureHandler<A>
 where
     A: Actor,
-    A::Message: Send,
-    A::Result: Send,
     F: Future + Unpin + Send + 'static,
     <F as Future>::Output: Send,
     FN: Fn() + Send + 'static,
@@ -82,8 +80,6 @@ impl Future for FinisherFuture {
 pub struct FutureHandler<A>
 where
     A: Actor,
-    A::Message: Send,
-    A::Result: Send,
 {
     state: Arc<AtomicBool>,
     waker: Arc<Mutex<Option<Waker>>>,
@@ -93,8 +89,6 @@ where
 impl<A> Clone for FutureHandler<A>
 where
     A: Actor,
-    A::Message: Send,
-    A::Result: Send,
 {
     fn clone(&self) -> Self {
         Self {
@@ -108,8 +102,6 @@ where
 impl<A> FutureHandler<A>
 where
     A: Actor + 'static,
-    A::Message: Send,
-    A::Result: Send,
 {
     /// Cancel the future.
     pub fn cancel(&self) {

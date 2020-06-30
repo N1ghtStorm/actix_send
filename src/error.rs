@@ -19,8 +19,6 @@ impl From<Canceled> for ActixSendError {
 impl<A> From<SendError<ChannelMessage<A>>> for ActixSendError
 where
     A: Actor,
-    A::Message: Send,
-    A::Result: Send,
 {
     fn from(_err: SendError<ChannelMessage<A>>) -> Self {
         ActixSendError::Closed

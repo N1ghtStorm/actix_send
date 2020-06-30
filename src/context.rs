@@ -8,11 +8,9 @@ use crate::interval::{IntervalFuture, IntervalFutureSet};
 use crate::util::future_handle::{spawn_cancelable, FutureHandler};
 use crate::util::runtime;
 
-pub(crate) struct ActorContext<A>
+pub struct ActorContext<A>
 where
-    A: Actor + Send + 'static,
-    A::Message: Send,
-    A::Result: Send,
+    A: Actor + 'static,
 {
     pub(crate) tx: Sender<ChannelMessage<A>>,
     pub(crate) actor: Option<A>,
@@ -22,9 +20,7 @@ where
 
 impl<A> ActorContext<A>
 where
-    A: Actor + Send,
-    A::Message: Send,
-    A::Result: Send,
+    A: Actor,
 {
     pub(crate) fn new(
         tx: Sender<ChannelMessage<A>>,
@@ -43,9 +39,7 @@ where
 // We use the delayed handler to cancel all delayed messages that are not processed.
 impl<A> Drop for ActorContext<A>
 where
-    A: Actor + Send + 'static,
-    A::Message: Send,
-    A::Result: Send,
+    A: Actor,
 {
     fn drop(&mut self) {
         for handler in self.delayed_handlers.iter() {
@@ -63,12 +57,12 @@ pub(crate) fn spawn_loop<A>(
 ) -> FutureHandler<A>
 where
     A: Actor + Handler + 'static,
-    A::Message: Send + 'static,
-    A::Result: Send,
 {
     let mut ctx: ActorContext<A> = ActorContext::new(tx, actor, interval_futures);
 
     let fut = async move {
+        ctx.actor.as_mut().unwrap().on_start();
+
         while let Ok(msg) = rx.recv().await {
             match msg {
                 ChannelMessage::Instant(tx, msg) => {
@@ -126,6 +120,7 @@ where
                 }
             }
         }
+        <A as Actor>::on_stop(ctx);
     };
 
     // ToDo: We should define on_cancel here so channel would reject new messages and handle all remaining instant messages.
@@ -135,8 +130,6 @@ where
 pub(crate) enum ChannelMessage<A>
 where
     A: Actor,
-    A::Message: Send,
-    A::Result: Send,
 {
     Instant(Option<OneshotSender<A::Result>>, A::Message),
     Delayed(A::Message, Duration),

@@ -38,7 +38,8 @@ async fn main() {
     let handler = address
         .run_interval(Duration::from_secs(1), |actor| async {
             // unfortunately it's hard to access a reference from an async closure.
-            // So every interval future would take ownership of the actor and return it at the end
+            // So every interval future would take ownership of the actor and return it at the end.
+            // *. Be sure not causing panic in this closure.
             println!("actor state is: {}", &actor.state1);
 
             actor

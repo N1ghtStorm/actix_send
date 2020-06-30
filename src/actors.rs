@@ -1,7 +1,7 @@
 use async_channel::unbounded;
 
 use crate::address::Address;
-use crate::context::{spawn_loop, ChannelMessage};
+use crate::context::{spawn_loop, ActorContext, ChannelMessage};
 use crate::interval::IntervalFutureSet;
 
 pub struct Builder<A>
@@ -14,9 +14,7 @@ where
 
 impl<A> Builder<A>
 where
-    A: Actor + Handler + Clone + 'static,
-    A::Message: Send + 'static,
-    A::Result: Send,
+    A: Actor + Handler + Clone,
 {
     /// Build multiple actors with the num passed.
     ///
@@ -37,7 +35,7 @@ where
         let interval_futures = IntervalFutureSet::new();
 
         if num > 1 {
-            for _ in 0..num {
+            for _i in 0..num {
                 let handler = spawn_loop(
                     self.actor.clone(),
                     tx.clone(),
@@ -67,8 +65,8 @@ pub trait Actor
 where
     Self: Sized + Send,
 {
-    type Message;
-    type Result;
+    type Message: Send;
+    type Result: Send;
 
     fn build(self) -> Builder<Self> {
         Builder {
@@ -77,12 +75,24 @@ where
         }
     }
 
+    /// Create an new actor with the closure.
     fn create<F>(f: F) -> Self
     where
         F: FnOnce() -> Self,
     {
         f()
     }
+
+    /// Called when actor starts.
+    ///
+    /// *. This would apply to every single instance of actor(s)
+    fn on_start(&mut self) {}
+
+    /// Called before actor stop. Actor's context would be passed as argument.
+    ///
+    /// *. This would apply to every single instance of actor(s)
+    #[allow(unused_variables)]
+    fn on_stop(ctx: ActorContext<Self>) {}
 }
 
 #[async_trait::async_trait]

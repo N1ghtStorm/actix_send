@@ -5,7 +5,7 @@ use actix_send::prelude::*;
     This is basically the code macro would generate.
 */
 
-// actor have impl with Clone(For multiple instances construction only )
+// actor impl with Clone(For multiple instances construction only )
 #[derive(Clone)]
 pub struct MyActor {
     pub state: String,
@@ -21,13 +21,13 @@ impl Actor for MyActor {
 pub struct Message1(u8);
 pub struct Message2(u16);
 
-// enumrate the message types so that it can be handed to <MyActor as Actor>::Message
+// construct enum to contain all message types for <MyActor as Actor>::Message
 pub enum MyActorMessage {
     Message1(Message1),
     Message2(Message2),
 }
 
-// impl From trait for auto converting message type to enum
+// impl From trait for auto converting message types to enum
 impl From<Message1> for MyActorMessage {
     fn from(msg: Message1) -> Self {
         MyActorMessage::Message1(msg)
@@ -40,13 +40,13 @@ impl From<Message2> for MyActorMessage {
     }
 }
 
-// enumrate the message's result type so that it can be handed to <MyActor as Actor>::Result
+// construct enum to contain all message result types for <MyActor as Actor>::Result
 pub enum MyActorResult {
     Message1Res(u32),
     Message2Res(u64),
 }
 
-// impl MapResult trait for auto converting enum result to message's result.
+// impl MapResult trait for auto converting enum result to message's result type.
 impl MapResult<MyActorResult> for Message1 {
     type Output = u32;
 
@@ -69,8 +69,8 @@ impl MapResult<MyActorResult> for Message2 {
     }
 }
 
-// impl handler and async_trait is required.
-// return type of every enumrate result must be the same as <Message as MapResult<MyActorResult>>::Output
+// impl handler and async_trait attribute is required.
+// return type of every arm of enum must be the same as <Message as MapResult<MyActorResult>>::Output
 #[async_trait]
 impl Handler for MyActor {
     async fn handle(&mut self, msg: <MyActor as Actor>::Message) -> <MyActor as Actor>::Result {

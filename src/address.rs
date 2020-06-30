@@ -16,8 +16,6 @@ use crate::util::{future_handle::FutureHandler, runtime};
 pub struct Address<A>
 where
     A: Actor + 'static,
-    A::Message: Send,
-    A::Result: Send,
 {
     tx: Sender<ChannelMessage<A>>,
     handlers: Arc<Mutex<Vec<FutureHandler<A>>>>,
@@ -26,9 +24,7 @@ where
 
 impl<A> Address<A>
 where
-    A: Actor + 'static,
-    A::Message: Send,
-    A::Result: Send,
+    A: Actor,
 {
     pub(crate) fn new(tx: Sender<ChannelMessage<A>>, handlers: Vec<FutureHandler<A>>) -> Self {
         Self {
@@ -41,9 +37,7 @@ where
 
 impl<A> Clone for Address<A>
 where
-    A: Actor + 'static,
-    A::Message: Send,
-    A::Result: Send,
+    A: Actor,
 {
     fn clone(&self) -> Self {
         Self {
@@ -57,8 +51,6 @@ where
 impl<A> Drop for Address<A>
 where
     A: Actor + 'static,
-    A::Message: Send,
-    A::Result: Send,
 {
     fn drop(&mut self) {
         if Arc::strong_count(&self.handlers) == 1 {
@@ -72,8 +64,6 @@ where
 impl<A> Address<A>
 where
     A: Actor + 'static,
-    A::Message: Send,
-    A::Result: Send,
 {
     /// Send a message to actor and await for result.
     ///
@@ -98,13 +88,15 @@ where
     }
 
     /// Send a message to actor and ignore the result.
-    pub fn do_send(&self, msg: impl Into<A::Message> + Send + 'static) {
+    pub fn do_send(&self, msg: impl Into<A::Message>) {
         let msg = ChannelMessage::Instant(None, msg.into());
         self._do_send(msg);
     }
 
     /// Run a message after a certain amount of delay.
-    pub fn run_later(&self, msg: impl Into<A::Message> + Send + 'static, delay: Duration) {
+    ///
+    /// *. If address is dropped we lose all pending messages that have not met the delay deadline.
+    pub fn run_later(&self, msg: impl Into<A::Message>, delay: Duration) {
         let msg = ChannelMessage::Delayed(msg.into(), delay);
         self._do_send(msg);
     }
@@ -113,7 +105,7 @@ where
     ///
     /// a `FutureHandler` would return that can be used to cancel it.
     ///
-    /// *. For now dropping the `FutureHandler` would do nothing and the interval future would last as long as the runtime.
+    /// *. dropping the `FutureHandler` would do nothing and the interval futures will be active until the address is dropped..
     #[must_use = "futures do nothing unless you `.await` or poll them"]
     pub async fn run_interval<F, Fut>(
         &self,
@@ -128,9 +120,9 @@ where
 
         let object = crate::interval::IntervalFutureContainer(f, PhantomData, PhantomData).pack();
 
-        let channel_message = ChannelMessage::Interval(tx, object, dur);
-
-        self.tx.send(channel_message).await?;
+        self.tx
+            .send(ChannelMessage::Interval(tx, object, dur))
+            .await?;
 
         Ok(rx.await?)
     }
