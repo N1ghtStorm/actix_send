@@ -6,11 +6,12 @@ use proc_macro::TokenStream;
 use syn::{
     export::Span, punctuated::Punctuated, token::Paren, AngleBracketedGenericArguments, Arm,
     AttrStyle, Attribute, AttributeArgs, Block, Expr, ExprAsync, ExprAwait, ExprBlock, ExprCall,
-    ExprMacro, ExprMatch, ExprParen, ExprPath, ExprTuple, Field, Fields, FieldsUnnamed, FnArg,
-    GenericArgument, Generics, Ident, ImplItem, ImplItemMethod, ImplItemType, Item, ItemEnum,
-    ItemImpl, Lit, Local, Macro, MacroDelimiter, Meta, MetaNameValue, NestedMeta, Pat, PatIdent,
-    PatTuple, PatTupleStruct, PatType, PatWild, Path, PathArguments, PathSegment, Receiver,
-    ReturnType, Signature, Stmt, Type, TypePath, Variant, VisPublic, Visibility,
+    ExprClosure, ExprMacro, ExprMatch, ExprMethodCall, ExprParen, ExprPath, ExprTuple, Field,
+    Fields, FieldsUnnamed, FnArg, GenericArgument, Generics, Ident, ImplItem, ImplItemMethod,
+    ImplItemType, Item, ItemEnum, ItemImpl, Lit, Local, Macro, MacroDelimiter, Meta, MetaNameValue,
+    NestedMeta, ParenthesizedGenericArguments, Pat, PatIdent, PatTuple, PatTupleStruct, PatType,
+    PatWild, Path, PathArguments, PathSegment, Receiver, ReturnType, Signature, Stmt, Type,
+    TypePath, Variant, VisPublic, Visibility,
 };
 
 use quote::quote;
@@ -211,7 +212,7 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
             let (_, items) = mod_item.content.as_mut().expect("mod is empty");
 
             // We will throw away all struct that have message attribute and collect some info.
-            let mut message_params: Vec<(Ident, Generics, Type)> = Vec::new();
+            let mut message_params: Vec<(Ident, Generics, Type, bool)> = Vec::new();
             // We collect attributes separately as they would apply to the final enum.
             let mut attributes: Vec<Attribute> = Vec::new();
             // We extract the actor's ident string and use it generate message enum struct ident.
@@ -235,6 +236,14 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
 
                         test.pop();
 
+                        let is_blocking = test.contains("blocking");
+
+                        if is_blocking {
+                            for _i in 0..9 {
+                                test.pop();
+                            }
+                        }
+
                         let result_typ = syn::parse_str::<syn::Type>(&test)
                             .unwrap_or_else(|_| panic!("Failed parsing string: {} to type", test));
 
@@ -242,6 +251,7 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                             struct_item.ident.clone(),
                             struct_item.generics.clone(),
                             result_typ,
+                            is_blocking,
                         ));
 
                         // ToDo: We are doing extra work here and collect the message attribute too.
@@ -309,7 +319,9 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                 Type::Path(type_path_from_idents(vec![message_enum_ident.clone()]));
 
             // ToDo: for now we ignore all generic params for message.
-            for (message_ident, _generics, result_type) in message_params.iter().cloned() {
+            for (message_ident, _generics, result_type, is_blocking) in
+                message_params.iter().cloned()
+            {
                 // construct a message's type path firstly we would use it multiple times later
                 let message_type_path = type_path_from_idents(vec![message_ident.clone()]);
 
@@ -333,16 +345,50 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                 });
 
                 // construct message result enum's new variant from message result type
+                // If we are handling a blocking message then we have to transform the result type
+                // to Result<message result type, ActixSendError>
                 let mut unnamed = FieldsUnnamed {
                     paren_token: Default::default(),
                     unnamed: Default::default(),
                 };
+                let ty = if is_blocking {
+                    let mut tp = TypePath {
+                        qself: None,
+                        path: Path {
+                            leading_colon: None,
+                            segments: Default::default(),
+                        },
+                    };
+
+                    let mut args = AngleBracketedGenericArguments {
+                        colon2_token: None,
+                        lt_token: Default::default(),
+                        args: Default::default(),
+                        gt_token: Default::default(),
+                    };
+
+                    args.args.push(GenericArgument::Type(result_type.clone()));
+                    args.args
+                        .push(GenericArgument::Type(Type::Path(type_path_from_idents(
+                            vec![Ident::new("ActixSendError", Span::call_site())],
+                        ))));
+
+                    tp.path.segments.push(PathSegment {
+                        ident: Ident::new("Result", Span::call_site()),
+                        arguments: PathArguments::AngleBracketed(args),
+                    });
+
+                    Type::Path(tp)
+                } else {
+                    result_type.clone()
+                };
+
                 unnamed.unnamed.push(Field {
                     attrs: vec![],
                     vis: Visibility::Inherited,
                     ident: None,
                     colon_token: None,
-                    ty: result_type.clone(),
+                    ty,
                 });
                 result_enum.variants.push(Variant {
                     attrs: vec![],
@@ -434,13 +480,44 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                     elems: Default::default(),
                 };
 
+                let result_ident = Ident::new("result", Span::call_site());
+
                 pat.elems.push(Pat::Ident(PatIdent {
                     attrs: vec![],
                     by_ref: None,
                     mutability: None,
-                    ident: Ident::new("result", Span::call_site()),
+                    ident: result_ident.clone(),
                     subpat: None,
                 }));
+
+                let mut result_path = Path {
+                    leading_colon: None,
+                    segments: Default::default(),
+                };
+
+                let mut path_args = ParenthesizedGenericArguments {
+                    paren_token: Default::default(),
+                    inputs: Default::default(),
+                    output: ReturnType::Default,
+                };
+
+                path_args.inputs.push(Type::Path(type_path_from_idents(
+                    vec![result_ident.clone()],
+                )));
+
+                // If we are handling a blocking message then the result_path doesn't have to be
+                // wrapped in Ok().
+                if is_blocking {
+                    result_path.segments.push(PathSegment {
+                        ident: result_ident,
+                        arguments: Default::default(),
+                    });
+                } else {
+                    result_path.segments.push(PathSegment {
+                        ident: Ident::new("Ok", Span::call_site()),
+                        arguments: PathArguments::Parenthesized(path_args),
+                    });
+                }
 
                 arms.push(Arm {
                     attrs: vec![],
@@ -454,7 +531,7 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                     body: Box::new(Expr::Path(ExprPath {
                         attrs: vec![],
                         qself: None,
-                        path: path_from_ident_str("result"),
+                        path: result_path,
                     })),
                     comma: Some(Default::default()),
                 });
@@ -481,6 +558,38 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                     comma: None,
                 });
 
+                let mut result_path = Path {
+                    leading_colon: None,
+                    segments: Default::default(),
+                };
+
+                let mut bracket = AngleBracketedGenericArguments {
+                    colon2_token: None,
+                    lt_token: Default::default(),
+                    args: Default::default(),
+                    gt_token: Default::default(),
+                };
+
+                bracket
+                    .args
+                    .push(GenericArgument::Type(Type::Path(type_path_from_idents(
+                        vec![
+                            Ident::new("Self", Span::call_site()),
+                            Ident::new("Output", Span::call_site()),
+                        ],
+                    ))));
+
+                bracket
+                    .args
+                    .push(GenericArgument::Type(Type::Path(type_path_from_idents(
+                        vec![Ident::new("ActixSendError", Span::call_site())],
+                    ))));
+
+                result_path.segments.push(PathSegment {
+                    ident: Ident::new("Result", Span::call_site()),
+                    arguments: PathArguments::AngleBracketed(bracket),
+                });
+
                 let mut method = ImplItemMethod {
                     attrs: vec![],
                     vis: Visibility::Inherited,
@@ -498,10 +607,10 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                         variadic: None,
                         output: ReturnType::Type(
                             Default::default(),
-                            Box::new(Type::Path(type_path_from_idents(vec![
-                                Ident::new("Self", Span::call_site()),
-                                Ident::new("Output", Span::call_site()),
-                            ]))),
+                            Box::new(Type::Path(TypePath {
+                                qself: None,
+                                path: result_path,
+                            })),
                         ),
                     },
                     block: Block {
@@ -655,7 +764,7 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
 
             let arms = message_params
                 .into_iter()
-                .map(|(message_ident, _, _)| {
+                .map(|(message_ident, _, _, is_blocking)| {
                     let mut path = path.clone();
 
                     path.segments.push(PathSegment {
@@ -693,30 +802,118 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                         })
                         .expect(&panic);
 
-                    let stmt1 = Stmt::Local(Local {
-                        attrs: vec![],
-                        let_token: Default::default(),
-                        pat: Pat::Ident(PatIdent {
+                    // we construct an optional statement is we are wrapping blocking
+                    let mut stmt0 = None;
+                    if is_blocking {
+                        // ToDo: in case async_trait changed.
+                        // *. Here we use a hack. #[async_trait] would transfer
+                        // all self identifier to _self by default so we take use of
+                        // it and map our cloned Self to _self identifier too.
+
+                        let st = Stmt::Local(Local {
                             attrs: vec![],
-                            by_ref: None,
-                            mutability: None,
-                            ident: Ident::new("result", Span::call_site()),
-                            subpat: None,
-                        }),
-                        init: Some((
-                            Default::default(),
-                            Box::new(Expr::Async(ExprAsync {
+                            let_token: Default::default(),
+                            pat: Pat::Ident(PatIdent {
                                 attrs: vec![],
-                                async_token: Default::default(),
-                                capture: Some(Default::default()),
+                                by_ref: None,
+                                mutability: None,
+                                ident: Ident::new("_self", Span::call_site()),
+                                subpat: None,
+                            }),
+                            init: Some((
+                                Default::default(),
+                                Box::new(Expr::MethodCall(ExprMethodCall {
+                                    attrs: vec![],
+                                    receiver: Box::new(Expr::Path(ExprPath {
+                                        attrs: vec![],
+                                        qself: None,
+                                        path: path_from_ident_str("self"),
+                                    })),
+                                    dot_token: Default::default(),
+                                    method: Ident::new("clone", Span::call_site()),
+                                    turbofish: None,
+                                    paren_token: Default::default(),
+                                    args: Default::default(),
+                                })),
+                            )),
+                            semi_token: Default::default(),
+                        });
+                        stmt0 = Some(st);
+                    };
+
+                    // If the message have blocking attribute we wrap the method in runtime::spawn_blocking
+                    let stmt1 = if is_blocking {
+                        let mut expr_call = ExprCall {
+                            attrs: vec![],
+                            func: Box::new(Expr::Path(ExprPath {
+                                attrs: vec![],
+                                qself: None,
+                                path: path_from_ident_str("actix_send_blocking"),
+                            })),
+                            paren_token: Default::default(),
+                            args: Default::default(),
+                        };
+
+                        let closure = ExprClosure {
+                            attrs: vec![],
+                            asyncness: None,
+                            movability: None,
+                            capture: Some(Default::default()),
+                            or1_token: Default::default(),
+                            inputs: Default::default(),
+                            or2_token: Default::default(),
+                            output: ReturnType::Default,
+                            body: Box::new(Expr::Block(ExprBlock {
+                                attrs: vec![],
+                                label: None,
                                 block: Block {
                                     brace_token: Default::default(),
                                     stmts,
                                 },
                             })),
-                        )),
-                        semi_token: Default::default(),
-                    });
+                        };
+
+                        expr_call.args.push(Expr::Closure(closure));
+
+                        Stmt::Local(Local {
+                            attrs: vec![],
+                            let_token: Default::default(),
+                            pat: Pat::Ident(PatIdent {
+                                attrs: vec![],
+                                by_ref: None,
+                                mutability: None,
+                                ident: Ident::new("result", Span::call_site()),
+                                subpat: None,
+                            }),
+                            init: Some((Default::default(), Box::new(Expr::Call(expr_call)))),
+                            semi_token: Default::default(),
+                        })
+                    } else {
+                        Stmt::Local(Local {
+                            attrs: vec![],
+                            let_token: Default::default(),
+                            pat: Pat::Ident(PatIdent {
+                                attrs: vec![],
+                                by_ref: None,
+                                mutability: None,
+                                ident: Ident::new("result", Span::call_site()),
+                                subpat: None,
+                            }),
+                            init: Some((
+                                Default::default(),
+                                Box::new(Expr::Async(ExprAsync {
+                                    attrs: vec![],
+                                    async_token: Default::default(),
+                                    capture: Some(Default::default()),
+                                    block: Block {
+                                        brace_token: Default::default(),
+                                        stmts,
+                                    },
+                                })),
+                            )),
+                            semi_token: Default::default(),
+                        })
+                    };
 
                     let mut path_stmt2 = Path {
                         leading_colon: None,
@@ -771,7 +968,10 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                             label: None,
                             block: Block {
                                 brace_token: Default::default(),
-                                stmts: vec![stmt1, stmt2],
+                                stmts: match stmt0 {
+                                    Some(stmt0) => vec![stmt0, stmt1, stmt2],
+                                    None => vec![stmt1, stmt2],
+                                },
                             },
                         })),
                         comma: Some(Default::default()),

@@ -76,15 +76,9 @@ where
     where
         M: Into<A::Message> + MapResult<A::Result>,
     {
-        let (tx, rx) = channel::<A::Result>();
+        let res = self._send(msg.into()).await?;
 
-        let channel_message = ChannelMessage::Instant(Some(tx), msg.into());
-
-        self.tx.send(channel_message).await?;
-
-        let res = rx.await?;
-
-        Ok(M::map(res))
+        M::map(res)
     }
 
     /// Send a message to actor and ignore the result.
@@ -105,7 +99,7 @@ where
     ///
     /// a `FutureHandler` would return that can be used to cancel it.
     ///
-    /// *. dropping the `FutureHandler` would do nothing and the interval futures will be active until the address is dropped..
+    /// *. dropping the `FutureHandler` would do nothing and the interval futures will be active until the address is dropped.
     #[must_use = "futures do nothing unless you `.await` or poll them"]
     pub async fn run_interval<F, Fut>(
         &self,
@@ -127,6 +121,16 @@ where
         Ok(rx.await?)
     }
 
+    async fn _send(&self, msg: A::Message) -> Result<A::Result, ActixSendError> {
+        let (tx, rx) = channel::<A::Result>();
+
+        let channel_message = ChannelMessage::Instant(Some(tx), msg);
+
+        self.tx.send(channel_message).await?;
+
+        Ok(rx.await?)
+    }
+
     fn _do_send(&self, msg: ChannelMessage<A>) {
         let this = self.tx.clone();
         runtime::spawn(async move {
@@ -139,5 +143,5 @@ where
 // M here is auto generated ActorResult from #[actor_mod] macro.
 pub trait MapResult<M>: Sized {
     type Output;
-    fn map(msg: M) -> Self::Output;
+    fn map(msg: M) -> Result<Self::Output, ActixSendError>;
 }

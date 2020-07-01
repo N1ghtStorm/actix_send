@@ -8,6 +8,7 @@ use crate::context::ChannelMessage;
 pub enum ActixSendError {
     Canceled,
     Closed,
+    Blocking,
 }
 
 impl From<Canceled> for ActixSendError {

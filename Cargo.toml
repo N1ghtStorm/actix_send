@@ -20,6 +20,14 @@ name = "basic"
 path = "examples/basic.rs"
 
 [[example]]
+name = "benchmark"
+path = "examples/benchmark.rs"
+
+[[example]]
+name = "blocking"
+path = "examples/blocking.rs"
+
+[[example]]
 name = "concurrency"
 path = "examples/concurrency.rs"
 
@@ -46,6 +54,6 @@ tokio = { version = "0.2.21", optional = true, default-features = false }
 async-std = { version = "1.6.2", features = ["unstable"] }
 tokio-test = { git = "https://github.com/tokio-rs/tokio" }
 tokio = { version = "0.2.21", features = ["full"] }
-actix = ""
+actix = "0.10.0-alpha.3"
 actix-rt = ""
 num_cpus = ""

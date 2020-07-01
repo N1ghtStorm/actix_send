@@ -50,9 +50,9 @@ pub enum MyActorResult {
 impl MapResult<MyActorResult> for Message1 {
     type Output = u32;
 
-    fn map(msg: MyActorResult) -> Self::Output {
+    fn map(msg: MyActorResult) -> Result<Self::Output, ActixSendError> {
         match msg {
-            MyActorResult::Message1Res(res) => res,
+            MyActorResult::Message1Res(res) => Ok(res),
             _ => unreachable!(),
         }
     }
@@ -61,9 +61,9 @@ impl MapResult<MyActorResult> for Message1 {
 impl MapResult<MyActorResult> for Message2 {
     type Output = u64;
 
-    fn map(msg: MyActorResult) -> Self::Output {
+    fn map(msg: MyActorResult) -> Result<Self::Output, ActixSendError> {
         match msg {
-            MyActorResult::Message2Res(res) => res,
+            MyActorResult::Message2Res(res) => Ok(res),
             _ => unreachable!(),
         }
     }

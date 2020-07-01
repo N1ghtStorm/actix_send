@@ -80,6 +80,7 @@ pub mod prelude {
     pub use crate::actors::{Actor, Handler};
     pub use crate::address::{Address, MapResult};
     pub use crate::error::ActixSendError;
+    pub use crate::util::runtime::spawn_blocking as actix_send_blocking;
     pub use actix_send_macros::*;
     pub use async_trait::async_trait;
 }

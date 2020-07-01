@@ -160,6 +160,17 @@ pub mod actix_send_actor {
     #[handler]
     impl Handler for ActixSendActor {
         async fn handle(&mut self, _: PingSend) -> u8 {
+            // We can access &mut Self directly in async context like below.
+            // But to be fair in comparison we clone the state and spawn a task.
+
+            // if self.heap_alloc {
+            //     let mut buffer = Vec::with_capacity(100_0000);
+            //     let _ = self.file.lock().await.read(&mut buffer).await.unwrap();
+            // } else {
+            //     let mut buffer = [0u8; 1_000];
+            //     let _ = self.file.lock().await.read(&mut buffer).await.unwrap();
+            // }
+
             let f = self.file.clone();
             let heap = self.heap_alloc;
             tokio::spawn(async move {
