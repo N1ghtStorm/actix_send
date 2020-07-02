@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::marker::PhantomData;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -101,18 +102,17 @@ where
     ///
     /// *. dropping the `FutureHandler` would do nothing and the interval futures will be active until the address is dropped.
     #[must_use = "futures do nothing unless you `.await` or poll them"]
-    pub async fn run_interval<F, Fut>(
+    pub async fn run_interval<F>(
         &self,
         dur: Duration,
         f: F,
     ) -> Result<FutureHandler<A>, ActixSendError>
     where
-        F: Fn(A) -> Fut + Send + 'static,
-        Fut: Future<Output = A> + Send + 'static,
+        for<'a> F: Fn(&'a mut A) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> + Send + 'static,
     {
         let (tx, rx) = channel::<FutureHandler<A>>();
 
-        let object = crate::interval::IntervalFutureContainer(f, PhantomData, PhantomData).pack();
+        let object = crate::interval::IntervalFutureContainer(f, PhantomData).pack();
 
         self.tx
             .send(ChannelMessage::Interval(tx, object, dur))

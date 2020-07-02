@@ -13,7 +13,7 @@ where
     A: Actor + 'static,
 {
     pub(crate) tx: Sender<ChannelMessage<A>>,
-    pub(crate) actor: Option<A>,
+    pub(crate) actor: A,
     pub(crate) delayed_handlers: Vec<FutureHandler<A>>,
     pub(crate) interval_futures: IntervalFutureSet<A>,
 }
@@ -29,7 +29,7 @@ where
     ) -> Self {
         Self {
             tx,
-            actor: Some(actor),
+            actor,
             delayed_handlers: Vec::new(),
             interval_futures,
         }
@@ -61,12 +61,12 @@ where
     let mut ctx: ActorContext<A> = ActorContext::new(tx, actor, interval_futures);
 
     let fut = async move {
-        ctx.actor.as_mut().unwrap().on_start();
+        ctx.actor.on_start();
 
         while let Ok(msg) = rx.recv().await {
             match msg {
                 ChannelMessage::Instant(tx, msg) => {
-                    let res = ctx.actor.as_mut().unwrap().handle(msg).await;
+                    let res = ctx.actor.handle(msg).await;
                     if let Some(tx) = tx {
                         let _ = tx.send(res);
                     }
@@ -86,9 +86,7 @@ where
                 ChannelMessage::IntervalFuture(idx) => {
                     let mut guard = ctx.interval_futures.lock().await;
                     if let Some(fut) = guard.get_mut(&idx) {
-                        let act = ctx.actor.take().unwrap_or_else(|| panic!("Actor is gone"));
-                        let act = fut.handle(act).await;
-                        ctx.actor = Some(act);
+                        let _ = fut.handle(&mut ctx.actor).await;
                     }
                 }
                 ChannelMessage::IntervalFutureRemove(idx) => {

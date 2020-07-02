@@ -1,4 +1,3 @@
-#![feature(drain_filter)]
 //! actix_send is an actor pattern loosely based on the design of [actix](https://crates.io/crates/actix) that can be run on various runtime.
 //!
 //! # Limitation:

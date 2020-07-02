@@ -73,8 +73,11 @@ impl<A> IntervalFuture<A>
 where
     A: Actor,
 {
-    pub(crate) fn handle(&mut self, actor: A) -> Pin<Box<dyn Future<Output = A> + Send>> {
-        self.func.as_mut().handle(actor)
+    pub(crate) fn handle<'a>(
+        &'a mut self,
+        act: &'a mut A,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        self.func.as_mut().handle(act)
     }
 }
 
@@ -84,25 +87,19 @@ where
     A: Actor,
 {
     // later in the pipeline we would want to extract the underlying async closure and pass actor state to it.
-    fn handle(&mut self, act: A) -> Pin<Box<dyn Future<Output = A> + Send>>;
+    fn handle<'a>(&'a mut self, act: &'a mut A) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 }
 
 // A type for containing the async closure.
-pub(crate) struct IntervalFutureContainer<A, F, Fut>(
-    pub(crate) F,
-    pub(crate) PhantomData<A>,
-    pub(crate) PhantomData<Fut>,
-)
+pub(crate) struct IntervalFutureContainer<A, F>(pub(crate) F, pub(crate) PhantomData<A>)
 where
     A: Actor + 'static,
-    F: Fn(A) -> Fut + Send + 'static,
-    Fut: Future<Output = A> + Send + 'static;
+    for<'a> F: Fn(&'a mut A) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> + Send + 'static;
 
-impl<A, F, Fut> IntervalFutureContainer<A, F, Fut>
+impl<A, F> IntervalFutureContainer<A, F>
 where
     A: Actor + 'static,
-    F: Fn(A) -> Fut + Send + 'static,
-    Fut: Future<Output = A> + Send + 'static,
+    for<'a> F: Fn(&'a mut A) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> + Send + 'static,
 {
     pub(crate) fn pack(self) -> IntervalFuture<A> {
         IntervalFuture {
@@ -112,13 +109,12 @@ where
 }
 
 // We make container type into a trait object.
-impl<A, F, Fut> IntervalFutureObj<A> for IntervalFutureContainer<A, F, Fut>
+impl<A, F> IntervalFutureObj<A> for IntervalFutureContainer<A, F>
 where
     A: Actor + 'static,
-    F: Fn(A) -> Fut + Send + 'static,
-    Fut: Future<Output = A> + Send + 'static,
+    for<'a> F: Fn(&'a mut A) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> + Send + 'static,
 {
-    fn handle(&mut self, act: A) -> Pin<Box<dyn Future<Output = A> + Send>> {
-        Box::pin((&mut self.0)(act))
+    fn handle<'a>(&'a mut self, act: &'a mut A) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        (&mut self.0)(act)
     }
 }

@@ -52,8 +52,7 @@ tokio = { version = "0.2.21", optional = true, default-features = false }
 
 [dev-dependencies]
 async-std = { version = "1.6.2", features = ["unstable"] }
-tokio-test = { git = "https://github.com/tokio-rs/tokio" }
 tokio = { version = "0.2.21", features = ["full"] }
 actix = "0.10.0-alpha.3"
-actix-rt = ""
+actix-rt = "1.1.1"
 num_cpus = ""

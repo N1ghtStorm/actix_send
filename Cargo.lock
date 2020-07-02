@@ -19,7 +19,7 @@ dependencies = [
  "parking_lot 0.10.2",
  "pin-project",
  "smallvec",
- "tokio 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tokio",
  "tokio-util",
  "trust-dns-proto",
  "trust-dns-resolver",
@@ -47,7 +47,7 @@ dependencies = [
  "futures-channel",
  "futures-util",
  "smallvec",
- "tokio 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tokio",
 ]
 
 [[package]]
@@ -89,8 +89,7 @@ dependencies = [
  "futures",
  "num_cpus",
  "parking_lot 0.11.0",
- "tokio 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
- "tokio-test",
+ "tokio",
 ]
 
 [[package]]
@@ -1108,18 +1107,6 @@ checksum = "53953d2d3a5ad81d9f844a32f14ebb121f50b650cd59d0ee2a07cf13c617efed"
 [[package]]
 name = "tokio"
 version = "0.2.21"
-source = "git+https://github.com/tokio-rs/tokio#cf2c05317c348c67a7dbbd9a2d334c39a333980f"
-dependencies = [
- "bytes",
- "fnv",
- "futures-core",
- "pin-project-lite",
- "slab",
-]
-
-[[package]]
-name = "tokio"
-version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d099fa27b9702bed751524694adbe393e18b36b204da91eb1cbbbbb4a5ee2d58"
 dependencies = [
@@ -1153,16 +1140,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tokio-test"
-version = "0.2.1"
-source = "git+https://github.com/tokio-rs/tokio#cf2c05317c348c67a7dbbd9a2d334c39a333980f"
-dependencies = [
- "bytes",
- "futures-core",
- "tokio 0.2.21 (git+https://github.com/tokio-rs/tokio)",
-]
-
-[[package]]
 name = "tokio-util"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1174,7 +1151,7 @@ dependencies = [
  "futures-sink",
  "log",
  "pin-project-lite",
- "tokio 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tokio",
 ]
 
 [[package]]
@@ -1193,7 +1170,7 @@ dependencies = [
  "rand",
  "smallvec",
  "thiserror",
- "tokio 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tokio",
  "url",
 ]
 
@@ -1213,7 +1190,7 @@ dependencies = [
  "resolv-conf",
  "smallvec",
  "thiserror",
- "tokio 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tokio",
  "trust-dns-proto",
 ]
 

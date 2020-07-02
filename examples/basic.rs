@@ -36,13 +36,11 @@ async fn main() {
 
     // register an interval future for actor with given duration.
     let handler = address
-        .run_interval(Duration::from_secs(1), |actor| async {
-            // unfortunately it's hard to access a reference from an async closure.
-            // So every interval future would take ownership of the actor and return it at the end.
-            // *. Be sure not causing panic in this closure.
-            println!("actor state is: {}", &actor.state1);
-
-            actor
+        .run_interval(Duration::from_secs(1), |actor| {
+            // Box the closure directly and wrap some async code in it.
+            Box::pin(async move {
+                println!("actor state is: {}", &actor.state1);
+            })
         })
         .await
         .unwrap();
