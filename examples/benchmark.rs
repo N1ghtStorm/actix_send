@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use tokio::fs::File;
 use tokio::sync::Mutex;
@@ -93,8 +93,6 @@ fn main() {
                         "total runtime is {:#?}",
                         Instant::now().duration_since(start)
                     );
-                    // delay the cold shutdown.
-                    let _ = tokio::time::delay_for(Duration::from_secs(1)).await;
                 });
         }
         "actix" => {
@@ -126,7 +124,6 @@ fn main() {
                     "total runtime is {:#?}",
                     Instant::now().duration_since(start)
                 );
-                let _ = tokio::time::delay_for(Duration::from_secs(1)).await;
             });
         }
         _ => panic!("--target must be either actix or actix_send"),
@@ -160,28 +157,18 @@ pub mod actix_send_actor {
     #[handler]
     impl Handler for ActixSendActor {
         async fn handle(&mut self, _: PingSend) -> u8 {
-            // We can access &mut Self directly in async context like below.
-            // But to be fair in comparison we clone the state and spawn a task.
-
-            // if self.heap_alloc {
-            //     let mut buffer = Vec::with_capacity(100_0000);
-            //     let _ = self.file.lock().await.read(&mut buffer).await.unwrap();
-            // } else {
-            //     let mut buffer = [0u8; 1_000];
-            //     let _ = self.file.lock().await.read(&mut buffer).await.unwrap();
-            // }
-
-            let f = self.file.clone();
+            // We can access Self directly but to be fair in comparison we clone and copy them.
             let heap = self.heap_alloc;
-            tokio::spawn(async move {
-                if heap {
-                    let mut buffer = Vec::with_capacity(100_0000);
-                    let _ = f.lock().await.read(&mut buffer).await.unwrap();
-                } else {
-                    let mut buffer = [0u8; 1_000];
-                    let _ = f.lock().await.read(&mut buffer).await.unwrap();
-                }
-            });
+            let f = self.file.clone();
+
+            if heap {
+                let mut buffer = Vec::with_capacity(100_0000);
+                let _ = f.lock().await.read(&mut buffer).await.unwrap();
+            } else {
+                let mut buffer = [0u8; 1_000];
+                let _ = f.lock().await.read(&mut buffer).await.unwrap();
+            }
+
             1
         }
     }
@@ -190,7 +177,7 @@ pub mod actix_send_actor {
 pub mod actix_actor {
     use std::sync::Arc;
 
-    use actix::{Actor, AsyncContext, Context, Handler, Message, WrapFuture};
+    use actix::{Actor, Context, Handler, Message, ResponseFuture};
     use tokio::fs::File;
     use tokio::io::AsyncReadExt;
     use tokio::sync::Mutex;
@@ -211,24 +198,22 @@ pub mod actix_actor {
     }
 
     impl Handler<Ping> for ActixActor {
-        type Result = u8;
+        type Result = ResponseFuture<u8>;
 
-        fn handle(&mut self, _: Ping, ctx: &mut Context<Self>) -> Self::Result {
+        fn handle(&mut self, _: Ping, _ctx: &mut Context<Self>) -> Self::Result {
             let f = self.file.clone();
             let heap = self.heap_alloc;
-            ctx.spawn(
-                async move {
-                    if heap {
-                        let mut buffer = Vec::with_capacity(100_0000);
-                        let _ = f.lock().await.read(&mut buffer).await.unwrap();
-                    } else {
-                        let mut buffer = [0u8; 1_000];
-                        let _ = f.lock().await.read(&mut buffer).await.unwrap();
-                    }
+
+            Box::pin(async move {
+                if heap {
+                    let mut buffer = Vec::with_capacity(100_0000);
+                    let _ = f.lock().await.read(&mut buffer).await.unwrap();
+                } else {
+                    let mut buffer = [0u8; 1_000];
+                    let _ = f.lock().await.read(&mut buffer).await.unwrap();
                 }
-                .into_actor(self),
-            );
-            1
+                1
+            })
         }
     }
 }

@@ -2,7 +2,7 @@ use crate::my_actor::*;
 use actix_send::prelude::*;
 use std::time::Duration;
 
-#[tokio::main(threaded_scheduler, core_threads = 12)]
+#[tokio::main]
 async fn main() {
     let state1 = String::from("running");
     let state2 = String::from("running");
