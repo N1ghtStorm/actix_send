@@ -20,6 +20,7 @@ use crate::actix_send_actor::*;
     ./target/release/examples/benchmark --target <actix_send or actix> --rounds <usize>.
 
     optional argument: --heap-alloc
+                       --dynamic
 
 */
 
@@ -29,6 +30,7 @@ fn main() {
     let mut target = String::from("actix_send");
     let mut rounds = 1000;
     let mut heap_alloc = false;
+    let mut dynamic = false;
 
     let mut iter = std::env::args().into_iter();
 
@@ -57,6 +59,9 @@ fn main() {
             if arg.as_str() == "--heap-alloc" {
                 heap_alloc = true;
             }
+            if arg.as_str() == "--dynamic" {
+                dynamic = true;
+            }
             continue;
         }
         break;
@@ -64,8 +69,6 @@ fn main() {
 
     match target.as_str() {
         "actix_send" => {
-            println!("starting benchmark actix_send");
-
             tokio::runtime::Builder::new()
                 .threaded_scheduler()
                 .core_threads(num)
@@ -79,20 +82,56 @@ fn main() {
 
                     let address = actor.build().num(num).start();
 
-                    let mut join = Vec::new();
+                    if dynamic {
+                        println!("starting benchmark actix_send with dynamic dispatch");
+                        let mut join = Vec::new();
 
-                    for _ in 0..num {
-                        for _ in 0..rounds {
-                            join.push(address.send(PingSend));
+                        for _ in 0..num {
+                            for _ in 0..rounds {
+                                join.push(address.run(|actor| {
+                                    Box::pin(async move {
+                                        use tokio::io::AsyncReadExt;
+                                        let heap = actor.heap_alloc;
+                                        let f = actor.file.clone();
+
+                                        if heap {
+                                            let mut buffer = Vec::with_capacity(100_0000);
+                                            let _ = f.lock().await.read(&mut buffer).await.unwrap();
+                                        } else {
+                                            let mut buffer = [0u8; 1_000];
+                                            let _ = f.lock().await.read(&mut buffer).await.unwrap();
+                                        }
+
+                                        1
+                                    })
+                                }));
+                            }
                         }
-                    }
 
-                    let start = Instant::now();
-                    futures::future::join_all(join).await;
-                    println!(
-                        "total runtime is {:#?}",
-                        Instant::now().duration_since(start)
-                    );
+                        let start = Instant::now();
+                        futures::future::join_all(join).await;
+                        println!(
+                            "total runtime is {:#?}",
+                            Instant::now().duration_since(start)
+                        );
+                    } else {
+                        println!("starting benchmark actix_send");
+
+                        let mut join = Vec::new();
+
+                        for _ in 0..num {
+                            for _ in 0..rounds {
+                                join.push(address.send(PingSend));
+                            }
+                        }
+
+                        let start = Instant::now();
+                        futures::future::join_all(join).await;
+                        println!(
+                            "total runtime is {:#?}",
+                            Instant::now().duration_since(start)
+                        );
+                    }
                 });
         }
         "actix" => {

@@ -90,6 +90,18 @@ where
                     );
                     ctx.delayed_handlers.push(delayed_handler);
                 }
+                ChannelMessage::DelayedDynamic(fut, dur) => {
+                    let tx = ctx.tx.clone();
+                    let delayed_handler = spawn_cancelable(
+                        Box::pin(async move {
+                            runtime::delay_for(dur).await;
+                            let _ = tx.send(ChannelMessage::InstantDynamic(None, fut)).await;
+                        }),
+                        true,
+                        || {},
+                    );
+                    ctx.delayed_handlers.push(delayed_handler);
+                }
                 ChannelMessage::IntervalFuture(idx) => {
                     let mut guard = ctx.interval_futures.lock().await;
                     if let Some(fut) = guard.get_mut(&idx) {
@@ -142,6 +154,7 @@ where
         FutureObjectContainer<A>,
     ),
     Delayed(A::Message, Duration),
+    DelayedDynamic(FutureObjectContainer<A>, Duration),
     Interval(
         OneshotSender<FutureHandler<A>>,
         FutureObjectContainer<A>,

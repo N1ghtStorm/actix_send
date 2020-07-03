@@ -78,7 +78,13 @@ where
     where
         M: Into<A::Message> + MapResult<A::Result>,
     {
-        let res = self._send(msg.into()).await?;
+        let (tx, rx) = channel::<A::Result>();
+
+        let channel_message = ChannelMessage::Instant(Some(tx), msg.into());
+
+        self.tx.send(channel_message).await?;
+
+        let res = rx.await?;
 
         M::map(res)
     }
@@ -86,15 +92,24 @@ where
     /// Send a message to actor and ignore the result.
     pub fn do_send(&self, msg: impl Into<A::Message>) {
         let msg = ChannelMessage::Instant(None, msg.into());
-        self._do_send(msg);
+        let this = self.tx.clone();
+        runtime::spawn(async move {
+            let _ = this.send(msg).await;
+        });
     }
 
     /// Send a message after a certain amount of delay.
     ///
     /// *. If address is dropped we lose all pending messages that have not met the delay deadline.
-    pub fn send_later(&self, msg: impl Into<A::Message>, delay: Duration) {
+    #[must_use = "futures do nothing unless you `.await` or poll them"]
+    pub async fn send_later(
+        &self,
+        msg: impl Into<A::Message>,
+        delay: Duration,
+    ) -> Result<(), ActixSendError> {
         let msg = ChannelMessage::Delayed(msg.into(), delay);
-        self._do_send(msg);
+        self.tx.send(msg).await?;
+        Ok(())
     }
 
     /// Run a boxed future on actor.
@@ -124,6 +139,35 @@ where
         r.ok_or(ActixSendError::TypeCast)
     }
 
+    /// Run a boxed future and ignore the result.    
+    pub fn do_run<F>(&self, f: F)
+    where
+        for<'a> F: Fn(&'a mut A) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> + Send + 'static,
+    {
+        let object = crate::object::FutureObject(f, PhantomData, PhantomData).pack();
+        let msg = ChannelMessage::InstantDynamic(None, object);
+
+        let this = self.tx.clone();
+        runtime::spawn(async move {
+            let _ = this.send(msg).await;
+        });
+    }
+
+    /// Run a boxed future after a certain amount of delay.  
+    #[must_use = "futures do nothing unless you `.await` or poll them"]
+    pub async fn run_later<F>(&self, delay: Duration, f: F) -> Result<(), ActixSendError>
+    where
+        for<'a> F: Fn(&'a mut A) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> + Send + 'static,
+    {
+        let object = crate::object::FutureObject(f, PhantomData, PhantomData).pack();
+
+        self.tx
+            .send(ChannelMessage::DelayedDynamic(object, delay))
+            .await?;
+
+        Ok(())
+    }
+
     /// Register an interval future for actor. An actor can have multiple interval futures registered.
     ///
     /// a `FutureHandler` would return that can be used to cancel it.
@@ -147,23 +191,6 @@ where
             .await?;
 
         Ok(rx.await?)
-    }
-
-    async fn _send(&self, msg: A::Message) -> Result<A::Result, ActixSendError> {
-        let (tx, rx) = channel::<A::Result>();
-
-        let channel_message = ChannelMessage::Instant(Some(tx), msg);
-
-        self.tx.send(channel_message).await?;
-
-        Ok(rx.await?)
-    }
-
-    fn _do_send(&self, msg: ChannelMessage<A>) {
-        let this = self.tx.clone();
-        runtime::spawn(async move {
-            let _ = this.send(msg).await;
-        });
     }
 }
 
