@@ -9,6 +9,7 @@ pub enum ActixSendError {
     Canceled,
     Closed,
     Blocking,
+    TypeCast,
 }
 
 impl From<Canceled> for ActixSendError {

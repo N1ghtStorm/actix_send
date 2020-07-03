@@ -73,6 +73,7 @@ pub(crate) mod address;
 pub(crate) mod context;
 pub(crate) mod error;
 pub(crate) mod interval;
+pub(crate) mod object;
 pub(crate) mod util;
 
 pub mod prelude {

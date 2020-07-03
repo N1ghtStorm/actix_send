@@ -11,6 +11,7 @@ use parking_lot::Mutex;
 use crate::actors::Actor;
 use crate::context::ChannelMessage;
 use crate::error::ActixSendError;
+use crate::object::FutureResultObjectContainer;
 use crate::util::{future_handle::FutureHandler, runtime};
 
 // A channel sender for communicating with actor(s).
@@ -88,12 +89,39 @@ where
         self._do_send(msg);
     }
 
-    /// Run a message after a certain amount of delay.
+    /// Send a message after a certain amount of delay.
     ///
     /// *. If address is dropped we lose all pending messages that have not met the delay deadline.
-    pub fn run_later(&self, msg: impl Into<A::Message>, delay: Duration) {
+    pub fn send_later(&self, msg: impl Into<A::Message>, delay: Duration) {
         let msg = ChannelMessage::Delayed(msg.into(), delay);
         self._do_send(msg);
+    }
+
+    /// Run a boxed future on actor.
+    ///
+    /// This function use dynamic dispatches to interact with actor.
+    ///
+    /// It gives you flexibility in exchange of some performance
+    /// (Each `Address::run` would have two more heap allocation than `Address::send`)
+    #[must_use = "futures do nothing unless you `.await` or poll them"]
+    pub async fn run<F, R>(&self, f: F) -> Result<R, ActixSendError>
+    where
+        for<'a> F: Fn(&'a mut A) -> Pin<Box<dyn Future<Output = R> + Send + 'a>> + Send + 'static,
+        R: Send + 'static,
+    {
+        let (tx, rx) = channel::<FutureResultObjectContainer>();
+
+        let object = crate::object::FutureObject(f, PhantomData, PhantomData).pack();
+
+        self.tx
+            .send(ChannelMessage::InstantDynamic(Some(tx), object))
+            .await?;
+
+        let mut res: FutureResultObjectContainer = rx.await?;
+
+        let r = res.unpack::<R>();
+
+        r.ok_or(ActixSendError::TypeCast)
     }
 
     /// Register an interval future for actor. An actor can have multiple interval futures registered.
@@ -112,7 +140,7 @@ where
     {
         let (tx, rx) = channel::<FutureHandler<A>>();
 
-        let object = crate::interval::IntervalFutureContainer(f, PhantomData).pack();
+        let object = crate::object::FutureObject(f, PhantomData, PhantomData).pack();
 
         self.tx
             .send(ChannelMessage::Interval(tx, object, dur))

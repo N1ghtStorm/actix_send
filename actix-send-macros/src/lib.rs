@@ -17,8 +17,10 @@ use syn::{
 use quote::quote;
 
 #[proc_macro_attribute]
-pub fn actor(_meta: TokenStream, input: TokenStream) -> TokenStream {
+pub fn actor(meta: TokenStream, input: TokenStream) -> TokenStream {
     let item = syn::parse(input).expect("failed to parse input");
+
+    let args = syn::parse_macro_input!(meta as AttributeArgs);
 
     match item {
         Item::Struct(mut struct_item) => {
@@ -110,6 +112,73 @@ pub fn actor(_meta: TokenStream, input: TokenStream) -> TokenStream {
 
                     attrs.tokens = quote! { #parsed };
                 }
+            }
+
+            // If #[actor(no_static)] is presented then we ignore the following and return Actor trait
+            // impl with () as Actor::Message and Actor::Result type
+            let is_dynamic = args
+                .iter()
+                .filter_map(|nest| {
+                    if let NestedMeta::Meta(Meta::Path(Path { segments, .. })) = nest {
+                        return Some(segments);
+                    }
+
+                    None
+                })
+                .map(|segments| {
+                    segments
+                        .iter()
+                        .find(|seg| seg.ident.to_string().as_str() == "no_static")
+                        .is_some()
+                })
+                .find(|bool| *bool)
+                .unwrap_or(false);
+
+            if is_dynamic {
+                let ident = struct_item.ident.clone();
+
+                let (impl_gen, impl_ty, impl_where) = struct_item.generics.split_for_impl();
+
+                let mut attr = Attribute {
+                    pound_token: Default::default(),
+                    style: AttrStyle::Outer,
+                    bracket_token: Default::default(),
+                    path: Path {
+                        leading_colon: None,
+                        segments: Default::default(),
+                    },
+                    tokens: Default::default(),
+                };
+
+                let seg = PathSegment {
+                    ident: Ident::new("async_trait", Span::call_site()),
+                    arguments: Default::default(),
+                };
+
+                attr.path.segments.push(seg.clone());
+                attr.path.segments.push(seg);
+
+                // impl Actor trait for struct;
+                let expended = quote! {
+                    #struct_item
+
+                    impl #impl_gen Actor for #ident #impl_ty
+                    #impl_where
+                    {
+                        type Message = ();
+                        type Result = ();
+                    }
+
+                    #attr
+                    impl Handler for #ident
+                    {
+                        async fn handle(&mut self, msg: ()) {
+
+                        }
+                    }
+                };
+
+                return expended.into();
             }
 
             let ident = struct_item.ident.clone();

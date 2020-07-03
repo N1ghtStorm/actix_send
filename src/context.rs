@@ -4,7 +4,8 @@ use async_channel::{Receiver, Sender};
 use futures::channel::oneshot::Sender as OneshotSender;
 
 use crate::actors::{Actor, Handler};
-use crate::interval::{IntervalFuture, IntervalFutureSet};
+use crate::interval::IntervalFutureSet;
+use crate::object::{FutureObjectContainer, FutureResultObjectContainer};
 use crate::util::future_handle::{spawn_cancelable, FutureHandler};
 use crate::util::runtime;
 
@@ -71,6 +72,12 @@ where
                         let _ = tx.send(res);
                     }
                 }
+                ChannelMessage::InstantDynamic(tx, mut fut) => {
+                    let res = fut.handle(&mut ctx.actor).await;
+                    if let Some(tx) = tx {
+                        let _ = tx.send(res);
+                    }
+                }
                 ChannelMessage::Delayed(msg, dur) => {
                     let tx = ctx.tx.clone();
                     let delayed_handler = spawn_cancelable(
@@ -130,8 +137,16 @@ where
     A: Actor,
 {
     Instant(Option<OneshotSender<A::Result>>, A::Message),
+    InstantDynamic(
+        Option<OneshotSender<FutureResultObjectContainer>>,
+        FutureObjectContainer<A>,
+    ),
     Delayed(A::Message, Duration),
-    Interval(OneshotSender<FutureHandler<A>>, IntervalFuture<A>, Duration),
+    Interval(
+        OneshotSender<FutureHandler<A>>,
+        FutureObjectContainer<A>,
+        Duration,
+    ),
     IntervalFuture(usize),
     IntervalFutureRemove(usize),
 }

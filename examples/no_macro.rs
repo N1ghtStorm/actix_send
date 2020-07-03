@@ -3,6 +3,14 @@ use actix_send::prelude::*;
 /*
     A hand written implementation of actor
     This is basically the code macro would generate.
+
+    Flow:
+
+    Messages -> ActorMessageEnum -> Actor::Message
+                                         |
+                                    Handler trait
+                                         |
+                                    Actor::Result    ->  ActorResultEnum ->  Results
 */
 
 // actor impl with Clone(For multiple instances construction only )
