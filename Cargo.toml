@@ -32,6 +32,10 @@ name = "concurrency"
 path = "examples/concurrency.rs"
 
 [[example]]
+name = "delayed_message"
+path = "examples/delayed_message.rs"
+
+[[example]]
 name = "dynamic_dispatch"
 path = "examples/dynamic_dispatch.rs"
 

@@ -68,8 +68,9 @@
 //! | `tokio-runtime` | Enable support for the `tokio` crate. | [tokio](https://crates.io/crates/tokio) | yes |
 //! | `async-std-runtime` | Enable support for the `async-std` crate. | [async-std](https://crates.io/crates/async-std)<br>[tokio](https://crates.io/crates/tokio) with `sync` feature | no |
 
-pub(crate) mod actors;
+pub(crate) mod actor;
 pub(crate) mod address;
+pub(crate) mod builder;
 pub(crate) mod context;
 pub(crate) mod error;
 pub(crate) mod interval;
@@ -77,7 +78,7 @@ pub(crate) mod object;
 pub(crate) mod util;
 
 pub mod prelude {
-    pub use crate::actors::{Actor, Handler};
+    pub use crate::actor::{Actor, Handler};
     pub use crate::address::{Address, MapResult};
     pub use crate::error::ActixSendError;
     pub use crate::util::runtime::spawn_blocking as actix_send_blocking;

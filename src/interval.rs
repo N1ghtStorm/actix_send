@@ -6,17 +6,28 @@ use std::sync::{
 
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard};
 
-use crate::actors::Actor;
+use crate::actor::Actor;
 use crate::object::FutureObjectContainer;
 
 // A shared hashmap of interval futures set between a set of actors.
-#[derive(Clone)]
 pub(crate) struct IntervalFutureSet<A>
 where
     A: Actor,
 {
     next_key: Arc<AtomicUsize>,
     futures: Arc<AsyncMutex<HashMap<usize, FutureObjectContainer<A>>>>,
+}
+
+impl<A> Clone for IntervalFutureSet<A>
+where
+    A: Actor,
+{
+    fn clone(&self) -> Self {
+        Self {
+            next_key: self.next_key.clone(),
+            futures: self.futures.clone(),
+        }
+    }
 }
 
 impl<A> Default for IntervalFutureSet<A>
@@ -35,10 +46,6 @@ impl<A> IntervalFutureSet<A>
 where
     A: Actor,
 {
-    pub(crate) fn new() -> Self {
-        Default::default()
-    }
-
     pub(crate) async fn lock(&self) -> MutexGuard<'_, HashMap<usize, FutureObjectContainer<A>>> {
         self.futures.lock().await
     }

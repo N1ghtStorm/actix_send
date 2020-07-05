@@ -1,7 +1,7 @@
 use async_channel::SendError;
 use futures::channel::oneshot::Canceled;
 
-use crate::actors::Actor;
+use crate::actor::Actor;
 use crate::context::ChannelMessage;
 
 #[derive(Debug)]

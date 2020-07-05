@@ -1,14 +1,16 @@
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 use std::time::Duration;
 
-use async_channel::Sender;
 use futures::channel::oneshot::channel;
-use parking_lot::Mutex;
 
-use crate::actors::Actor;
+use crate::actor::{Actor, ActorState};
+use crate::builder::Sender;
 use crate::context::ChannelMessage;
 use crate::error::ActixSendError;
 use crate::object::FutureResultObjectContainer;
@@ -19,8 +21,9 @@ pub struct Address<A>
 where
     A: Actor + 'static,
 {
-    tx: Sender<ChannelMessage<A>>,
-    handlers: Arc<Mutex<Vec<FutureHandler<A>>>>,
+    strong_count: Arc<AtomicUsize>,
+    tx: Sender<A>,
+    state: ActorState<A>,
     _a: PhantomData<A>,
 }
 
@@ -28,10 +31,11 @@ impl<A> Address<A>
 where
     A: Actor,
 {
-    pub(crate) fn new(tx: Sender<ChannelMessage<A>>, handlers: Vec<FutureHandler<A>>) -> Self {
+    pub(crate) fn new(tx: Sender<A>, state: ActorState<A>) -> Self {
         Self {
+            strong_count: Arc::new(AtomicUsize::new(1)),
             tx,
-            handlers: Arc::new(Mutex::new(handlers)),
+            state,
             _a: PhantomData,
         }
     }
@@ -42,9 +46,11 @@ where
     A: Actor,
 {
     fn clone(&self) -> Self {
+        self.strong_count.fetch_add(1, Ordering::Release);
         Self {
+            strong_count: self.strong_count.clone(),
             tx: self.tx.clone(),
-            handlers: self.handlers.clone(),
+            state: self.state.clone(),
             _a: PhantomData,
         }
     }
@@ -55,10 +61,8 @@ where
     A: Actor + 'static,
 {
     fn drop(&mut self) {
-        if Arc::strong_count(&self.handlers) == 1 {
-            for handler in self.handlers.lock().iter() {
-                handler.cancel();
-            }
+        if self.strong_count.fetch_sub(1, Ordering::Release) == 1 {
+            self.state.shutdown();
         }
     }
 }
@@ -68,8 +72,6 @@ where
     A: Actor + 'static,
 {
     /// Send a message to actor and await for result.
-    ///
-    /// Message will be returned in `ActixSendError::Closed(Message)` if the actor is already closed.
     #[must_use = "futures do nothing unless you `.await` or poll them"]
     pub async fn send<M>(
         &self,
@@ -100,7 +102,7 @@ where
 
     /// Send a message after a certain amount of delay.
     ///
-    /// *. If address is dropped we lose all pending messages that have not met the delay deadline.
+    /// *. If `Address` is dropped we lose all pending messages that have not met the delay deadline.
     #[must_use = "futures do nothing unless you `.await` or poll them"]
     pub async fn send_later(
         &self,
@@ -132,11 +134,7 @@ where
             .send(ChannelMessage::InstantDynamic(Some(tx), object))
             .await?;
 
-        let mut res: FutureResultObjectContainer = rx.await?;
-
-        let r = res.unpack::<R>();
-
-        r.ok_or(ActixSendError::TypeCast)
+        rx.await?.unpack::<R>().ok_or(ActixSendError::TypeCast)
     }
 
     /// Run a boxed future and ignore the result.    
@@ -154,6 +152,8 @@ where
     }
 
     /// Run a boxed future after a certain amount of delay.  
+    ///
+    /// *. If `Address` is dropped we lose all pending boxed futures that have not met the delay deadline.
     #[must_use = "futures do nothing unless you `.await` or poll them"]
     pub async fn run_later<F>(&self, delay: Duration, f: F) -> Result<(), ActixSendError>
     where

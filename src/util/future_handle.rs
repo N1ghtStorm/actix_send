@@ -6,11 +6,11 @@ use std::sync::{
 };
 use std::task::{Context, Poll, Waker};
 
-use async_channel::Sender;
 use futures::future::Either;
 use parking_lot::Mutex;
 
-use crate::actors::Actor;
+use crate::actor::Actor;
+use crate::builder::WeakSender;
 use crate::context::ChannelMessage;
 use crate::util::runtime;
 
@@ -20,15 +20,13 @@ where
     A: Actor,
     F: Future + Unpin + Send + 'static,
     <F as Future>::Output: Send,
-    FN: Fn() + Send + 'static,
+    FN: FnOnce() + Send + 'static,
 {
     let waker = Arc::new(Mutex::new(None));
-
     let state = Arc::new(AtomicBool::new(true));
 
     let finisher = FinisherFuture {
-        init: false,
-        should_run: state.clone(),
+        state: state.clone(),
         waker: waker.clone(),
     };
 
@@ -50,10 +48,35 @@ where
     }
 }
 
+pub(crate) fn spawn_cancelable_new<F, A>(
+    f: F,
+) -> (FutureHandler<A>, futures::future::Select<FinisherFuture, F>)
+where
+    A: Actor,
+    F: Future + Unpin + Send + 'static,
+    <F as Future>::Output: Send,
+{
+    let waker = Arc::new(Mutex::new(None));
+    let state = Arc::new(AtomicBool::new(true));
+
+    let finisher = FinisherFuture {
+        state: state.clone(),
+        waker: waker.clone(),
+    };
+
+    let future = futures::future::select(finisher, f);
+    let handler = FutureHandler {
+        state,
+        waker,
+        tx: None,
+    };
+
+    (handler, future)
+}
+
 // a future notified and polled by future_handler.
 pub(crate) struct FinisherFuture {
-    init: bool,
-    should_run: Arc<AtomicBool>,
+    state: Arc<AtomicBool>,
     waker: Arc<Mutex<Option<Waker>>>,
 }
 
@@ -63,15 +86,12 @@ impl Future for FinisherFuture {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
 
-        if !this.should_run.load(Ordering::Acquire) {
+        if !this.state.load(Ordering::Acquire) {
             return Poll::Ready(());
         }
 
-        if !this.init {
-            let mut waker = this.waker.lock();
-            *waker = Some(cx.waker().clone());
-            this.init = true;
-        }
+        let mut waker = this.waker.lock();
+        *waker = Some(cx.waker().clone());
 
         Poll::Pending
     }
@@ -83,7 +103,7 @@ where
 {
     state: Arc<AtomicBool>,
     waker: Arc<Mutex<Option<Waker>>>,
-    tx: Option<(usize, Sender<ChannelMessage<A>>)>,
+    tx: Option<(usize, WeakSender<A>)>,
 }
 
 impl<A> Clone for FutureHandler<A>
@@ -105,21 +125,22 @@ where
 {
     /// Cancel the future.
     pub fn cancel(&self) {
-        self.state.store(false, Ordering::SeqCst);
+        self.state.store(false, Ordering::Release);
         if let Some(waker) = self.waker.lock().take() {
             waker.wake();
         }
         // We remove the interval future with index as key.
         if let Some((index, tx)) = self.tx.as_ref() {
-            let tx = tx.clone();
-            let index = *index;
-            runtime::spawn(async move {
-                let _ = tx.send(ChannelMessage::IntervalFutureRemove(index)).await;
-            });
+            if let Some(tx) = tx.upgrade() {
+                let index = *index;
+                runtime::spawn(async move {
+                    let _ = tx.send(ChannelMessage::IntervalFutureRemove(index)).await;
+                });
+            }
         }
     }
 
-    pub(crate) fn attach_tx(&mut self, index: usize, tx: Sender<ChannelMessage<A>>) {
+    pub(crate) fn attach_tx(&mut self, index: usize, tx: WeakSender<A>) {
         self.tx = Some((index, tx));
     }
 }

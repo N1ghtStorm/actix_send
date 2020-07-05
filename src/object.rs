@@ -7,7 +7,7 @@ use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
 
-use crate::actors::Actor;
+use crate::actor::Actor;
 
 // a container for FutureTrait object
 pub(crate) struct FutureObjectContainer<A>
