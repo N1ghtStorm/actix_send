@@ -15,46 +15,13 @@ use crate::context::ChannelMessage;
 use crate::util::runtime;
 
 // helper function for spawn a future on runtime and return a handler that can cancel it.
-pub(crate) fn spawn_cancelable<F, FN, A>(f: F, cancel_now: bool, on_cancel: FN) -> FutureHandler<A>
+pub(crate) fn spawn_cancelable<F, A, FN, Fut>(f: F, on_ready: FN) -> FutureHandler<A>
 where
     A: Actor,
     F: Future + Unpin + Send + 'static,
     <F as Future>::Output: Send,
-    FN: FnOnce() + Send + 'static,
-{
-    let waker = Arc::new(Mutex::new(None));
-    let state = Arc::new(AtomicBool::new(true));
-
-    let finisher = FinisherFuture {
-        state: state.clone(),
-        waker: waker.clone(),
-    };
-
-    runtime::spawn(async move {
-        let either = futures::future::select(finisher, f).await;
-
-        if let Either::Left((_, f)) = either {
-            on_cancel();
-            if !cancel_now {
-                let _ = f.await;
-            }
-        }
-    });
-
-    FutureHandler {
-        state,
-        waker,
-        tx: None,
-    }
-}
-
-pub(crate) fn spawn_cancelable_new<F, A>(
-    f: F,
-) -> (FutureHandler<A>, futures::future::Select<FinisherFuture, F>)
-where
-    A: Actor,
-    F: Future + Unpin + Send + 'static,
-    <F as Future>::Output: Send,
+    FN: FnOnce(Either<((), F), (<F as Future>::Output, FinisherFuture)>) -> Fut + Send + 'static,
+    Fut: Future<Output = ()> + Send,
 {
     let waker = Arc::new(Mutex::new(None));
     let state = Arc::new(AtomicBool::new(true));
@@ -71,7 +38,12 @@ where
         tx: None,
     };
 
-    (handler, future)
+    runtime::spawn(async {
+        let either = future.await;
+        on_ready(either).await;
+    });
+
+    handler
 }
 
 // a future notified and polled by future_handler.

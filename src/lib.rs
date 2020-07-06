@@ -75,11 +75,12 @@ pub(crate) mod context;
 pub(crate) mod error;
 pub(crate) mod interval;
 pub(crate) mod object;
+pub(crate) mod stream;
 pub(crate) mod util;
 
 pub mod prelude {
     pub use crate::actor::{Actor, Handler};
-    pub use crate::address::{Address, MapResult};
+    pub use crate::address::{Address, MapResult, WeakAddress};
     pub use crate::error::ActixSendError;
     pub use crate::util::runtime::spawn_blocking as actix_send_blocking;
     pub use actix_send_macros::*;

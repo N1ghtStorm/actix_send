@@ -8,12 +8,14 @@ use std::sync::{
 use std::time::Duration;
 
 use futures::channel::oneshot::channel;
+use futures::Stream;
 
 use crate::actor::{Actor, ActorState};
-use crate::builder::Sender;
+use crate::builder::{Sender, WeakSender};
 use crate::context::ChannelMessage;
 use crate::error::ActixSendError;
 use crate::object::FutureResultObjectContainer;
+use crate::stream::ActorStream;
 use crate::util::{future_handle::FutureHandler, runtime};
 
 // A channel sender for communicating with actor(s).
@@ -36,6 +38,15 @@ where
             strong_count: Arc::new(AtomicUsize::new(1)),
             tx,
             state,
+            _a: PhantomData,
+        }
+    }
+
+    pub fn downgrade(&self) -> WeakAddress<A> {
+        WeakAddress {
+            strong_count: self.strong_count.clone(),
+            tx: self.tx.downgrade(),
+            state: self.state.clone(),
             _a: PhantomData,
         }
     }
@@ -191,6 +202,48 @@ where
             .await?;
 
         Ok(rx.await?)
+    }
+
+    /// Send a stream to actor and return a new stream applied with `Handler::handle` method.
+    ///
+    /// *. Item of the stream must be actor's message type.
+    #[must_use = "futures do nothing unless you `.await` or poll them"]
+    pub fn send_stream<S, I>(
+        &self,
+        stream: S,
+    ) -> impl Stream<Item = Result<<I as MapResult<A::Result>>::Output, ActixSendError>>
+    where
+        S: Stream<Item = I>,
+        I: Into<A::Message> + MapResult<A::Result> + 'static,
+    {
+        ActorStream::new(stream, self.tx.clone())
+    }
+}
+
+pub struct WeakAddress<A>
+where
+    A: Actor + 'static,
+{
+    strong_count: Arc<AtomicUsize>,
+    tx: WeakSender<A>,
+    state: ActorState<A>,
+    _a: PhantomData<A>,
+}
+
+impl<A> WeakAddress<A>
+where
+    A: Actor,
+{
+    pub fn upgrade(self) -> Option<Address<A>> {
+        self.tx.upgrade().map(|sender| {
+            self.strong_count.fetch_add(1, Ordering::SeqCst);
+            Address {
+                strong_count: self.strong_count,
+                tx: sender,
+                state: self.state,
+                _a: PhantomData,
+            }
+        })
     }
 }
 

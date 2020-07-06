@@ -43,6 +43,10 @@ path = "examples/dynamic_dispatch.rs"
 name = "no_macro"
 path = "examples/no_macro.rs"
 
+[[example]]
+name = "stream"
+path = "examples/stream.rs"
+
 [features]
 default = ["tokio-runtime"]
 tokio-runtime = ["tokio/rt-threaded", "tokio/sync", "tokio/time"]
@@ -54,6 +58,7 @@ async-channel = "1.1.0"
 async-trait = "0.1.36"
 futures = { version = "0.3.5", default-features = false, features = ["alloc"] }
 parking_lot = "0.11.0"
+pin-project = "0.4.22"
 
 async-std = { version = "1.6.2", optional = true, default-features = false }
 tokio = { version = "0.2.21", optional = true, default-features = false }

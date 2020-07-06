@@ -89,6 +89,7 @@ dependencies = [
  "futures",
  "num_cpus",
  "parking_lot 0.11.0",
+ "pin-project",
  "tokio",
 ]
 

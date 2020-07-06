@@ -34,13 +34,15 @@ where
     /// Called when actor starts.
     ///
     /// *. This would apply to every single instance of actor(s)
+    ///
+    /// 8. This would apply to restart process if `Builder::restart_on_err` is set to true
     fn on_start(&mut self) {}
 
     /// Called before actor stop. Actor's context would be passed as argument.
     ///
     /// *. This would apply to every single instance of actor(s)
     #[allow(unused_variables)]
-    fn on_stop(actor: Self) {}
+    fn on_stop(&mut self) {}
 }
 
 // a marker bit to notify if the Address is dropping.
@@ -82,7 +84,7 @@ where
 {
     pub(crate) fn new(config: Config) -> Self {
         Self {
-            active: Arc::new(AtomicUsize::new(config.num << 1)),
+            active: Arc::new(AtomicUsize::new(0)),
             handlers: Default::default(),
             interval_futures: Default::default(),
             config,
@@ -93,58 +95,46 @@ where
         self.handlers.lock().extend(handler);
     }
 
-    // pub(crate) fn restart_on_err(&self) -> bool {
-    //     self.config.restart_on_err
-    // }
+    pub(crate) fn restart_on_err(&self) -> bool {
+        self.config.restart_on_err
+    }
 
     pub(crate) fn handle_delay_on_shutdown(&self) -> bool {
         self.config.handle_delayed_on_shutdown
     }
 
-    // pub(crate) fn inc_active(&self) -> bool {
-    //     let mut active = self.active.load(Ordering::Acquire);
-    //     loop {
-    //         // We are shutdown so we return with false
-    //         if active & MARKER != 0 {
-    //             return false;
-    //         }
-    //
-    //         let new = ((active >> 1) + 1) << 1;
-    //
-    //         // there could be other thread trying to
-    //         if self.active.compare_and_swap(active, new, Ordering::Release) == active {
-    //             return true;
-    //         }
-    //
-    //         std::thread::yield_now();
-    //         active = self.active.load(Ordering::Acquire);
-    //     }
-    // }
+    pub(crate) fn inc_active(&self) -> bool {
+        self.modify_active(|active| ((active >> 1) + 1) << 1)
+    }
 
-    // pub(crate) fn dec_active(&self) -> bool {
-    //     let mut active = self.active.load(Ordering::Acquire);
-    //     loop {
-    //         // if active & MARKER != 0 {
-    //         //     return false;
-    //         // }
-    //
-    //         let new = ((active >> 1) - 1) << 1;
-    //
-    //         if self.active.compare_and_swap(active, new, Ordering::Release) == active {
-    //             return true;
-    //         }
-    //         std::thread::yield_now();
-    //         active = self.active.load(Ordering::Acquire);
-    //     }
-    // }
-    //
+    pub(crate) fn dec_active(&self) -> bool {
+        self.modify_active(|active| ((active >> 1) - 1) << 1)
+    }
+
+    fn modify_active<F>(&self, mut f: F) -> bool
+    where
+        F: FnMut(usize) -> usize,
+    {
+        let mut active = self.active.load(Ordering::Acquire);
+        loop {
+            if active & MARKER != 0 {
+                return false;
+            }
+
+            let new = f(active);
+
+            if self.active.compare_and_swap(active, new, Ordering::Release) == active {
+                return true;
+            }
+
+            std::thread::yield_now();
+            active = self.active.load(Ordering::Acquire);
+        }
+    }
+
     // pub(crate) fn current_active(&self) -> usize {
-    //     let state = self.active.load(Ordering::Acquire);
+    //     let state = self.active.load(Ordering::SeqCst);
     //     state >> 1
-    // }
-
-    // pub(crate) fn set_active(&self, active: usize) {
-    //     self.active.store(active << 1, Ordering::Release);
     // }
 
     pub(crate) fn shutdown(&self) {
@@ -156,14 +146,6 @@ where
             handler.cancel();
         }
     }
-
-    // pub(crate) fn is_running(&self) -> bool {
-    //     self.active.load(Ordering::Acquire) & MARKER == 0
-    // }
-
-    // pub(crate) fn restart(self) {
-    //     if self.config.restart_on_err {}
-    // }
 }
 
 #[async_trait::async_trait]
@@ -172,73 +154,4 @@ where
     Self: Actor,
 {
     async fn handle(&mut self, msg: Self::Message) -> Self::Result;
-}
-
-#[cfg(feature = "tokio-runtime")]
-#[cfg(not(feature = "async-std-runtime"))]
-pub mod test_actor {
-    use crate::prelude::*;
-
-    #[actor_mod]
-    pub mod my_actor {
-        use crate::prelude::*;
-
-        #[actor]
-        pub struct TestActor {
-            pub state1: String,
-            pub state2: String,
-        }
-
-        #[message(result = "u8")]
-        pub struct DummyMessage1 {
-            pub from: String,
-        }
-
-        #[message(result = "u16")]
-        pub struct DummyMessage2(pub u32, pub usize);
-
-        #[handler]
-        impl Handler for TestActor {
-            // The msg and handle's return type must match former message macro's result type.
-            async fn handle(&mut self, msg: DummyMessage1) -> u8 {
-                assert_eq!("running1", self.state1);
-                8
-            }
-        }
-
-        #[handler]
-        impl Handler for TestActor {
-            async fn handle(&mut self, msg: DummyMessage2) -> u16 {
-                assert_eq!("running2", self.state2);
-                16
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn test() {
-        use super::test_actor::my_actor::*;
-
-        let state1 = String::from("running1");
-        let state2 = String::from("running2");
-        let actor = TestActor::create(|| TestActor { state1, state2 });
-
-        // build and start the actor(s).
-        let address: Address<TestActor> = actor.build().num(1).start();
-
-        // construct a new message instance and convert it to a MessageObject
-        let msg = DummyMessage1 {
-            from: "a simple test".to_string(),
-        };
-
-        let msg2 = DummyMessage2(1, 2);
-
-        // use address to send message object to actor and await on result.
-        let res = address.send(msg).await.unwrap();
-
-        let res2 = address.send(msg2).await.unwrap();
-
-        assert_eq!(res, 8);
-        assert_eq!(res2, 16);
-    }
 }

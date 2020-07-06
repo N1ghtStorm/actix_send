@@ -4,7 +4,7 @@ use async_channel::{unbounded, SendError};
 
 use crate::actor::{Actor, ActorState, Handler};
 use crate::address::Address;
-use crate::context::{spawn_loop, ChannelMessage};
+use crate::context::{ActorContext, ChannelMessage};
 
 pub struct Builder<A>
 where
@@ -59,6 +59,13 @@ where
         self
     }
 
+    /// Notify the actor(s) to restart if it exits on error.
+    pub fn restart_on_err(mut self) -> Self {
+        self.config.restart_on_err = true;
+        self
+    }
+
+    /// Start actor(s) with the Builder settings.
     pub fn start(self) -> Address<A> {
         let num = self.config.num;
 
@@ -71,15 +78,16 @@ where
 
         if num > 1 {
             for _i in 0..num {
-                spawn_loop(
-                    self.actor.clone(),
+                ActorContext::new(
                     tx.downgrade(),
                     rx.clone(),
+                    self.actor.clone(),
                     state.clone(),
-                );
+                )
+                .spawn_loop();
             }
         } else {
-            spawn_loop(self.actor, tx.downgrade(), rx, state.clone());
+            ActorContext::new(tx.downgrade(), rx, self.actor, state.clone()).spawn_loop();
         }
 
         Address::new(tx, state)
