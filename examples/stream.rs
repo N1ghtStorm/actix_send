@@ -14,10 +14,10 @@ async fn main() {
     // create a mock stream
     let stream = MockStream { offset: 0 };
 
-    // by send the stream to actor. we would handle every stream item as a message
+    // by sending the stream to actor we can handle every stream item as a message
     // and return the result as a new stream
 
-    // since our mock stream produces String so we  map the item from string to Message1
+    // since our mock stream produces String so we map the item from string to Message1
     let mut new_stream = address.send_stream(stream.map(|from| Message1 { from }));
 
     let future1 = async move {
@@ -29,11 +29,12 @@ async fn main() {
 
     // We can send the same message type as the stream through normal message at the same time.
     // We won't get our result crossed.
+    let addr = address.clone();
     let future2 = async move {
         for i in 0..5 {
             let from = format!("message from sender {}", i);
 
-            let res = address.send(Message1 { from: from.clone() }).await.unwrap();
+            let res = addr.send(Message1 { from: from.clone() }).await.unwrap();
             assert_eq!(from, res);
         }
     };

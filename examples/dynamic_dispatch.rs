@@ -23,8 +23,22 @@ async fn main() {
         })
         .await;
 
+    let mut var = String::from("outer variable");
+
     let state = address
-        .run(|actor| Box::pin(async move { actor.state }))
+        .run(move |actor| {
+            // We can capture the (mut) reference of outer variable with move.
+            let capture = &mut var;
+
+            // We can not capture the outer variable in the boxed future for now.
+            // So it has to be dereference / copy / clone and then move into the async block.
+            let _async_capture = capture.clone();
+            Box::pin(async move {
+                let _async_capture = _async_capture;
+
+                actor.state
+            })
+        })
         .await;
 
     println!("Current MyActor state is: {:#?}", state.unwrap());

@@ -22,6 +22,7 @@ where
     #[pin]
     stream: S,
     tx: Sender<A>,
+    #[allow(clippy::type_complexity)]
     pending_future: Option<
         Pin<Box<dyn Future<Output = Result<<I as MapResult<A::Result>>::Output, ActixSendError>>>>,
     >,

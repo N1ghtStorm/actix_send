@@ -1,8 +1,17 @@
-use crate::my_actor::*;
-use actix_send::prelude::*;
 use std::time::Duration;
 
-#[tokio::main]
+use actix_send::prelude::*;
+use futures::StreamExt;
+
+use crate::my_actor::*;
+
+/*
+    By default we don't enable async-std runtime. Please run this example with:
+
+    cargo run --example basic --no-default-features --features async-std-runtime
+*/
+
+#[async_std::main]
 async fn main() {
     let state1 = String::from("running");
     let state2 = String::from("running");
@@ -45,7 +54,7 @@ async fn main() {
         .await
         .unwrap();
 
-    let mut interval = tokio::time::interval(Duration::from_secs(1));
+    let mut interval = async_std::stream::interval(Duration::from_secs(1));
 
     for i in 0..5 {
         if i == 3 {
@@ -54,7 +63,7 @@ async fn main() {
             println!("interval future stopped");
         }
 
-        interval.tick().await;
+        interval.next().await;
     }
     println!("example finish successfully");
 }

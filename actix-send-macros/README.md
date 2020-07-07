@@ -1,7 +1,6 @@
 ## Job of this macro set:
 - ### Generate boilerplate implementation for actors.<br> This includes:
-  - `Actor` trait implementation for actors.  
-  - `Message` trait implementation for actors.
+  - `Actor` trait implementation for actors.
   - `Handler` trait implementation for actors.(Including `async_trait` implementation)
 
 - ### Generate type convertion for actors.<br> This includes:

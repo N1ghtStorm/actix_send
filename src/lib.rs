@@ -1,13 +1,14 @@
 //! actix_send is an actor pattern loosely based on the design of [actix](https://crates.io/crates/actix) that can be run on various runtime.
 //!
 //! # Limitation:
-//! - Features are minimal with message processing and interval futures.
+//!
 //! - Generics in actor and message are not handled properly by macros.
 //! - All types and futures must be `Send`.
 //!
 //! # Example:
 //! ```rust
 //! use actix_send::prelude::*;
+//!
 //! use my_actor::*;
 //!
 //! #[tokio::main]
@@ -26,7 +27,6 @@
 //!     };
 //!
 //!     // use address to send messages to actor and await on result.
-//!     // We need infer our type here. and the type should be the message's result type in #[message] macro
 //!     let res = address.send(msg).await;
 //!     println!("We got result for Message1\r\nResult is: {:?}", res);
 //! }

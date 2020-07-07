@@ -1,5 +1,6 @@
-use crate::my_actor::*;
 use actix_send::prelude::*;
+
+use crate::my_actor::*;
 
 #[actor_mod]
 pub mod my_actor {
@@ -21,8 +22,7 @@ pub mod my_actor {
 
     #[handler]
     impl Handler for TestActor {
-        // The msg and handle's return type must match former message macro's result type.
-        async fn handle(&mut self, msg: DummyMessage1) -> u8 {
+        async fn handle(&mut self, _: DummyMessage1) -> u8 {
             assert_eq!("running1", self.state1);
             8
         }
@@ -30,7 +30,7 @@ pub mod my_actor {
 
     #[handler]
     impl Handler for TestActor {
-        async fn handle(&mut self, msg: DummyMessage2) -> u16 {
+        async fn handle(&mut self, _: DummyMessage2) -> u16 {
             assert_eq!("running2", self.state2);
             16
         }
@@ -39,25 +39,37 @@ pub mod my_actor {
 
 #[tokio::test]
 async fn basic() {
-    let state1 = String::from("running1");
-    let state2 = String::from("running2");
-    let actor = TestActor::create(|| TestActor { state1, state2 });
+    let actor = test_actor();
 
-    // build and start the actor(s).
-    let address: Address<TestActor> = actor.build().num(1).start();
+    let address = actor.build().num(1).start();
 
-    // construct a new message instance and convert it to a MessageObject
     let msg = DummyMessage1 {
         from: "a simple test".to_string(),
     };
 
     let msg2 = DummyMessage2(1, 2);
 
-    // use address to send message object to actor and await on result.
     let res = address.send(msg).await.unwrap();
-
     let res2 = address.send(msg2).await.unwrap();
 
     assert_eq!(res, 8);
     assert_eq!(res2, 16);
+}
+
+#[tokio::test]
+async fn weak_addr() {
+    let actor = test_actor();
+
+    let address = actor.build().start();
+
+    let weak = address.downgrade();
+    drop(address);
+
+    assert!(weak.upgrade().is_none());
+}
+
+fn test_actor() -> TestActor {
+    let state1 = String::from("running1");
+    let state2 = String::from("running2");
+    TestActor::create(|| TestActor { state1, state2 })
 }

@@ -51,13 +51,13 @@ pub(crate) struct FutureObject<A, F, R>(
 )
 where
     A: Actor + 'static,
-    for<'a> F: Fn(&'a mut A) -> Pin<Box<dyn Future<Output = R> + Send + 'a>> + Send + 'static,
+    for<'a> F: FnMut(&'a mut A) -> Pin<Box<dyn Future<Output = R> + Send + 'a>> + Send + 'static,
     R: Send + 'static;
 
 impl<A, F, R> FutureObject<A, F, R>
 where
     A: Actor + 'static,
-    for<'a> F: Fn(&'a mut A) -> Pin<Box<dyn Future<Output = R> + Send + 'a>> + Send + 'static,
+    for<'a> F: FnMut(&'a mut A) -> Pin<Box<dyn Future<Output = R> + Send + 'a>> + Send + 'static,
     R: Send + 'static,
 {
     pub(crate) fn pack(self) -> FutureObjectContainer<A> {
@@ -70,7 +70,7 @@ where
 impl<A, F, R> FutureTrait<A> for FutureObject<A, F, R>
 where
     A: Actor + 'static,
-    for<'a> F: Fn(&'a mut A) -> Pin<Box<dyn Future<Output = R> + Send + 'a>> + Send + 'static,
+    for<'a> F: FnMut(&'a mut A) -> Pin<Box<dyn Future<Output = R> + Send + 'a>> + Send + 'static,
     R: Send + 'static,
 {
     fn handle<'a>(

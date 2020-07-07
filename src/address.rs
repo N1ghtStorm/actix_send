@@ -134,7 +134,8 @@ where
     #[must_use = "futures do nothing unless you `.await` or poll them"]
     pub async fn run<F, R>(&self, f: F) -> Result<R, ActixSendError>
     where
-        for<'a> F: Fn(&'a mut A) -> Pin<Box<dyn Future<Output = R> + Send + 'a>> + Send + 'static,
+        for<'a> F:
+            FnMut(&'a mut A) -> Pin<Box<dyn Future<Output = R> + Send + 'a>> + Send + 'static,
         R: Send + 'static,
     {
         let (tx, rx) = channel::<FutureResultObjectContainer>();
@@ -217,6 +218,11 @@ where
         I: Into<A::Message> + MapResult<A::Result> + 'static,
     {
         ActorStream::new(stream, self.tx.clone())
+    }
+
+    /// The number of currently active actors for the given address.
+    pub fn current_active(&self) -> usize {
+        self.state.current_active()
     }
 }
 

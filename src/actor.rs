@@ -132,10 +132,10 @@ where
         }
     }
 
-    // pub(crate) fn current_active(&self) -> usize {
-    //     let state = self.active.load(Ordering::SeqCst);
-    //     state >> 1
-    // }
+    pub(crate) fn current_active(&self) -> usize {
+        let state = self.active.load(Ordering::SeqCst);
+        state >> 1
+    }
 
     pub(crate) fn shutdown(&self) {
         // We write marker to the last bit of active usize.
