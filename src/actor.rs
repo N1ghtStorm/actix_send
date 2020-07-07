@@ -51,7 +51,7 @@ const MARKER: usize = 1;
 // A state shared between a set of actors.
 pub(crate) struct ActorState<A>
 where
-    A: Actor + 'static,
+    A: Actor,
 {
     // The count of actors we actually spawned.
     // With the last bit as MARKER to indicate if the address is dropping.
@@ -66,7 +66,7 @@ where
 
 impl<A> Clone for ActorState<A>
 where
-    A: Actor + 'static,
+    A: Actor,
 {
     fn clone(&self) -> Self {
         Self {
@@ -140,8 +140,7 @@ where
     pub(crate) fn shutdown(&self) {
         // We write marker to the last bit of active usize.
         self.active.fetch_or(MARKER, Ordering::SeqCst);
-        // cancel all the actors context loop.
-        // ToDo: figure a way to graceful shutdown. Maybe we should leave on actor active.
+        // cancel all the actors future handlers for delayed message and interval futures.
         for handler in self.handlers.lock().iter() {
             handler.cancel();
         }

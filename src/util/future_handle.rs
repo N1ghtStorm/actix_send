@@ -14,37 +14,49 @@ use crate::builder::WeakSender;
 use crate::context::ChannelMessage;
 use crate::util::runtime;
 
-// helper function for spawn a future on runtime and return a handler that can cancel it.
-pub(crate) fn spawn_cancelable<F, A, FN, Fut>(f: F, on_ready: FN) -> FutureHandler<A>
-where
-    A: Actor,
-    F: Future + Unpin + Send + 'static,
-    <F as Future>::Output: Send,
-    FN: FnOnce(Either<((), F), (<F as Future>::Output, FinisherFuture)>) -> Fut + Send + 'static,
-    Fut: Future<Output = ()> + Send,
-{
-    let waker = Arc::new(Mutex::new(None));
-    let state = Arc::new(AtomicBool::new(true));
+macro_rules! spawn_cancel {
+    ($($send:ident)*) => {
+        // helper function for spawn a future on runtime and return a handler that can cancel it.
+        pub(crate) fn spawn_cancelable<F, A, FN, Fut>(f: F, on_ready: FN) -> FutureHandler<A>
+        where
+            A: Actor,
+            F: Future + Unpin $( + $send)* + 'static,
+            <F as Future>::Output: Send,
+            FN: FnOnce(Either<((), F), (<F as Future>::Output, FinisherFuture)>) -> Fut
+                $( + $send)*
+                + 'static,
+            Fut: Future<Output = ()> $( + $send)*,
+        {
+            let waker = Arc::new(Mutex::new(None));
+            let state = Arc::new(AtomicBool::new(true));
 
-    let finisher = FinisherFuture {
-        state: state.clone(),
-        waker: waker.clone(),
+            let finisher = FinisherFuture {
+                state: state.clone(),
+                waker: waker.clone(),
+            };
+
+            let future = futures::future::select(finisher, f);
+            let handler = FutureHandler {
+                state,
+                waker,
+                tx: None,
+            };
+
+            runtime::spawn(async {
+                let either = future.await;
+                on_ready(either).await;
+            });
+
+            handler
+        }
     };
-
-    let future = futures::future::select(finisher, f);
-    let handler = FutureHandler {
-        state,
-        waker,
-        tx: None,
-    };
-
-    runtime::spawn(async {
-        let either = future.await;
-        on_ready(either).await;
-    });
-
-    handler
 }
+
+#[cfg(not(feature = "actix-runtime"))]
+spawn_cancel!(Send);
+
+#[cfg(feature = "actix-runtime")]
+spawn_cancel!();
 
 // a future notified and polled by future_handler.
 pub(crate) struct FinisherFuture {

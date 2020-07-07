@@ -3,7 +3,6 @@
 //! # Limitation:
 //!
 //! - Generics in actor and message are not handled properly by macros.
-//! - All types and futures must be `Send`.
 //!
 //! # Example:
 //! ```rust
@@ -64,9 +63,10 @@
 //! # Features
 //! | Feature | Description | Extra dependencies | Default |
 //! | ------- | ----------- | ------------------ | ------- |
-//! | `default` | The same as `tokio-runtime` feature | [async-channel]("https://github.com/stjepang/async-channel")<br>[async-trait](https://crates.io/crates/async-trait)<br>[futures](https://crates.io/crates/futures)<br>[actix-send-macros](https://github.com/fakeshadow/actix_send) | yes |
+//! | `default` | The same as `tokio-runtime` feature | [actix-send-macros](https://github.com/fakeshadow/actix_send)<br>[async-channel](https://crates.io/crates/async-channel)<br>[async-trait](https://crates.io/crates/async-trait)<br>[futures](https://crates.io/crates/futures)<br>[parking_lot](https://crates.io/crates/parking_lot)<br>[pin-project](https://crates.io/crates/pin-project) | yes |
 //! | `tokio-runtime` | Enable support for the `tokio` crate. | [tokio](https://crates.io/crates/tokio) | yes |
 //! | `async-std-runtime` | Enable support for the `async-std` crate. | [async-std](https://crates.io/crates/async-std)<br>[tokio](https://crates.io/crates/tokio) with `sync` feature | no |
+//! | `actix-runtime` | Enable support for the `actix-rt` crate. | [actix-rt](https://crates.io/crates/actix-rt)<br>[tokio](https://crates.io/crates/tokio) with `sync` feature | no |
 
 pub(crate) mod actor;
 pub(crate) mod address;
