@@ -7,8 +7,8 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use futures::channel::oneshot::channel;
-use futures::Stream;
+use futures_channel::oneshot::channel;
+use futures_util::stream::Stream;
 
 use crate::actor::{Actor, ActorState};
 use crate::builder::{Sender, WeakSender};

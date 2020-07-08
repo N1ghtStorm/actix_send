@@ -2,12 +2,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 use std::task::{Context, Poll, Waker};
 
-use futures::future::Either;
-use parking_lot::Mutex;
+use futures_util::future::Either;
 
 use crate::actor::Actor;
 use crate::builder::WeakSender;
@@ -35,7 +34,7 @@ macro_rules! spawn_cancel {
                 waker: waker.clone(),
             };
 
-            let future = futures::future::select(finisher, f);
+            let future = futures_util::future::select(finisher, f);
             let handler = FutureHandler {
                 state,
                 waker,
@@ -74,7 +73,7 @@ impl Future for FinisherFuture {
             return Poll::Ready(());
         }
 
-        let mut waker = this.waker.lock();
+        let mut waker = this.waker.lock().unwrap();
         *waker = Some(cx.waker().clone());
 
         Poll::Pending
@@ -110,7 +109,7 @@ where
     /// Cancel the future.
     pub fn cancel(&self) {
         self.state.store(false, Ordering::Release);
-        if let Some(waker) = self.waker.lock().take() {
+        if let Some(waker) = self.waker.lock().unwrap().take() {
             waker.wake();
         }
         // We remove the interval future with index as key.

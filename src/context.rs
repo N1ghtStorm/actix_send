@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use async_channel::Receiver;
-use futures::channel::oneshot::Sender as OneshotSender;
+use futures_channel::oneshot::Sender as OneshotSender;
 
 use crate::actor::{Actor, ActorState, Handler};
 use crate::builder::WeakSender;
@@ -46,7 +46,7 @@ where
             let handler = spawn_cancelable(
                 Box::pin(runtime::delay_for(dur)),
                 move |either| async move {
-                    if let futures::future::Either::Left(_) = either {
+                    if let futures_util::future::Either::Left(_) = either {
                         if !handle_delay_on_shutdown {
                             return;
                         }

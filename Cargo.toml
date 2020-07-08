@@ -57,13 +57,13 @@ actix-runtime = ["actix-rt", "tokio/sync"]
 actix_send_macros = { path = "./actix-send-macros" }
 async-channel = "1.1.0"
 async-trait = "0.1.36"
-futures = { version = "0.3.5", default-features = false, features = ["alloc"] }
-parking_lot = "0.11.0"
+futures-channel = { version = "0.3.5", default-features = false }
+futures-util = { version = "0.3.5", default-features = false }
 pin-project = "0.4.22"
 
+actix-rt = { version = "1.1.1", optional = true }
 async-std = { version = "1.6.2", optional = true, default-features = false }
 tokio = { version = "0.2.21", optional = true, default-features = false }
-actix-rt = { version = "1.1.1", optional = true }
 
 [dev-dependencies]
 async-std = { version = "1.6.2", features = ["attributes", "unstable"] }

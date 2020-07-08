@@ -2,8 +2,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use futures::channel::oneshot::channel;
-use futures::Stream;
+use futures_channel::oneshot::channel;
+use futures_util::stream::Stream;
 use pin_project::pin_project;
 
 use crate::actor::Actor;

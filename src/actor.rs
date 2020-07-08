@@ -1,9 +1,7 @@
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    Arc,
+    Arc, Mutex,
 };
-
-use parking_lot::Mutex;
 
 use crate::builder::{Builder, Config};
 use crate::interval::IntervalFutureSet;
@@ -56,9 +54,9 @@ where
     // The count of actors we actually spawned.
     // With the last bit as MARKER to indicate if the address is dropping.
     active: Arc<AtomicUsize>,
-    // All the actors context loop handlers. Can be used to shutdown any actor.
+    // Actors delayed and interval task handlers. Used to drop all tasks when actor is shutdown.
     handlers: Arc<Mutex<Vec<FutureHandler<A>>>>,
-    // All the interval futures are store in a hashmap
+    // All the interval future objects are stored in this set.
     pub(crate) interval_futures: IntervalFutureSet<A>,
     // config for setting inherent from Builder.
     config: Config,
@@ -92,7 +90,10 @@ where
     }
 
     pub(crate) fn push_handler(&self, handler: Vec<FutureHandler<A>>) {
-        self.handlers.lock().extend(handler);
+        // Only push the handler if actors not shutdown.
+        if self.is_running() {
+            self.handlers.lock().unwrap().extend(handler);
+        }
     }
 
     pub(crate) fn restart_on_err(&self) -> bool {
@@ -140,10 +141,14 @@ where
     pub(crate) fn shutdown(&self) {
         // We write marker to the last bit of active usize.
         self.active.fetch_or(MARKER, Ordering::SeqCst);
-        // cancel all the actors future handlers for delayed message and interval futures.
-        for handler in self.handlers.lock().iter() {
+        // cancel all the actors future handlers for delayed and interval tasks.
+        for handler in self.handlers.lock().unwrap().iter() {
             handler.cancel();
         }
+    }
+
+    fn is_running(&self) -> bool {
+        self.active.load(Ordering::SeqCst) & MARKER == 0
     }
 }
 

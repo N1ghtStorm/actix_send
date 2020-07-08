@@ -1,7 +1,7 @@
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 
 use async_channel::SendError;
-use futures::channel::oneshot::Canceled;
+use futures_channel::oneshot::Canceled;
 
 use crate::actor::Actor;
 use crate::context::ChannelMessage;
