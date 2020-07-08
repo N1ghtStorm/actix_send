@@ -16,7 +16,7 @@ macro_rules! object {
         where
             A: Actor,
         {
-            func: Box<dyn FutureTrait<A> $( + $send)*>,
+            func: Box<dyn FutureTrait<A> + Send>,
         }
 
         impl<A> FutureObjectContainer<A>
@@ -89,7 +89,7 @@ macro_rules! object {
 
         // A type contain the result trait object.
         pub(crate) struct FutureResultObjectContainer {
-            result: Box<dyn FutureResultTrait $( + $send)*>,
+            result: Box<dyn FutureResultTrait + Send>,
         }
     };
 }

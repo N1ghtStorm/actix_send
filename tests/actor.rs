@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use actix_send::prelude::*;
 
 use crate::my_actor::*;
@@ -66,6 +68,17 @@ async fn weak_addr() {
     drop(address);
 
     assert!(weak.upgrade().is_none());
+}
+
+#[tokio::test]
+async fn active_count() {
+    let actor = test_actor();
+
+    let address = actor.build().num(8).start();
+
+    let _ = tokio::time::delay_for(Duration::from_secs(1)).await;
+
+    assert_eq!(address.current_active(), 8);
 }
 
 fn test_actor() -> TestActor {

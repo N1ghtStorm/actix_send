@@ -1,71 +1,102 @@
-use std::time::Duration;
-
-use actix_send::prelude::*;
-
-use crate::my_actor::*;
-use std::rc::Rc;
+#[cfg(feature = "actix-runtime")]
+use {crate::my_actor::*, actix_send::prelude::*, std::rc::Rc, std::time::Duration};
 
 /*
     When enabling actix-runtime we have more freedom in our handle methods at the exchange of a
     single threaded runtime.
-    (Arbiter support would added in the future for multi threads use case.).
 
     By default we don't enable actix runtime. Please run this example with:
 
     cargo run --example actix --no-default-features --features actix-runtime
 */
 
-#[actix_rt::main]
-async fn main() {
-    let state = String::from("running");
+fn main() {
+    #[cfg(feature = "actix-runtime")]
+    actix_rt::System::new("actix-test").block_on(async {
+        let state = String::from("running");
 
-    let actor = MyActor::create(|| MyActor { state });
+        let actor = MyActor::create(|| MyActor { state });
 
-    /*
-       When build multiple actors they would all spawn on current thread where start method called.
-       So we would have 4 actors share the same address working on the main thread.
-       They would not block one another when processing messages.
-    */
-    let address = actor.build().num(4).start();
+        /*
+           When build multiple actors they would all spawn on current thread where start method called.
+           So we would have 4 actors share the same address working on the main thread.
+           They would not block one another when processing messages.
+        */
+        let address = actor.build().num(4).start();
 
-    let res = address.send(Message1).await.unwrap();
+        let res = address.send(Message1).await.unwrap();
 
-    println!("We got result for Message1\r\nResult is: {:?}\r\n", res);
+        println!("We got result for Message1\r\nResult is: {:?}\r\n", res);
 
-    // register an interval future for actor with given duration.
-    let handler = address
-        .run_interval(Duration::from_secs(1), |_actor| {
-            // Box the closure directly and wrap some async code in it.
+        // register an interval future for actor with given duration.
+        let handler = address
+            .run_interval(Duration::from_secs(1), |_actor| {
+                // Box the closure directly and wrap some async code in it.
 
-            let rc = Rc::new(123);
-            Box::pin(async move {
-                let _ = actix_rt::time::delay_for(Duration::from_millis(1)).await;
+                let rc = Rc::new(123);
+                Box::pin(async move {
+                    let _ = actix_rt::time::delay_for(Duration::from_millis(1)).await;
 
-                // the boxed future doesn't have to be Send. so we can use Rc across await point.
-                println!("Rc is: {}", &rc);
+                    // the boxed future doesn't have to be Send. so we can use Rc across await point.
+                    println!("Rc is: {}", &rc);
+                })
             })
-        })
-        .await
-        .unwrap();
+            .await
+            .unwrap();
 
-    let mut interval = actix_rt::time::interval(Duration::from_secs(1));
+        let mut interval = actix_rt::time::interval(Duration::from_secs(1));
 
-    for i in 0..5 {
-        if i == 3 {
-            // cancel the interval future after 3 seconds.
-            handler.cancel();
-            println!("interval future stopped");
+        for i in 0..5 {
+            if i == 3 {
+                // cancel the interval future after 3 seconds.
+                handler.cancel();
+                println!("interval future stopped");
+            }
+
+            interval.tick().await;
         }
 
-        interval.tick().await;
-    }
-    println!("example finish successfully");
+        drop(address);
+
+        let state = String::from("running2");
+        let actor = MyActor::create(|| MyActor { state });
+
+        /*
+            We can utilize arbiters and spawn our actors on a thread other than the current one.
+        */
+
+        // build a set of arbiters.
+        let mut arbiters = Vec::new();
+        for _ in 0..6 {
+            let arbiter = actix_rt::Arbiter::new();
+            arbiters.push(arbiter);
+        }
+
+        /*
+            Start multiple actors on the given arbiters. The actors would try to spawn on them evenly.
+            Note that we pass a slice of the Vec<Arbiter> to the arg so you can pass partial slice for
+            a more precise control.
+        */
+
+        let address = actor.build().num(12).start_with_arbiter(&arbiters[2..5]);
+
+        let _ = actix_rt::time::delay_for(Duration::from_secs(1)).await;
+
+        println!(
+            "current active actor count is: {}",
+            address.current_active()
+        );
+
+        println!("example finish successfully");
+    })
 }
 
+#[cfg(feature = "actix-runtime")]
 #[actor_mod]
 pub mod my_actor {
-    use super::*;
     use std::cell::RefCell;
+
+    use super::*;
 
     #[actor]
     pub struct MyActor {
