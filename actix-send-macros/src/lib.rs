@@ -288,51 +288,104 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
             let mut actor_ident_str = String::new();
 
             for item in items.iter_mut() {
-                if let Item::Struct(struct_item) = item {
-                    // before we throw them we collect all the type, field and message's return type
-                    // attributes other than message are collected as well.
-                    if let Some(attr) = is_ident(&struct_item.attrs, "message") {
-                        let mut test: String = attr
-                            .tokens
-                            .to_string()
-                            .split('=')
-                            .collect::<Vec<&str>>()
-                            .pop()
-                            .expect("#[message(result = \"T\")] is missing")
-                            .chars()
-                            .filter(|char| char != &'\"' && char != &' ')
-                            .collect();
+                match item {
+                    Item::Struct(struct_item) => {
+                        // before we throw them we collect all the type, field and message's return type
+                        // attributes other than message are collected as well.
+                        if let Some(attr) = is_ident(&struct_item.attrs, "message") {
+                            let mut test: String = attr
+                                .tokens
+                                .to_string()
+                                .split('=')
+                                .collect::<Vec<&str>>()
+                                .pop()
+                                .expect("#[message(result = \"T\")] is missing")
+                                .chars()
+                                .filter(|char| char != &'\"' && char != &' ')
+                                .collect();
 
-                        test.pop();
+                            test.pop();
 
-                        let is_blocking = test.contains("blocking");
+                            let is_blocking = test.contains("blocking");
 
-                        if is_blocking {
-                            for _i in 0..9 {
-                                test.pop();
+                            if is_blocking {
+                                for _i in 0..9 {
+                                    test.pop();
+                                }
                             }
+
+                            let result_typ =
+                                syn::parse_str::<syn::Type>(&test).unwrap_or_else(|_| {
+                                    panic!("Failed parsing string: {} to type", test)
+                                });
+
+                            message_params.push((
+                                struct_item.ident.clone(),
+                                struct_item.generics.clone(),
+                                result_typ,
+                                is_blocking,
+                            ));
+
+                            // ToDo: We are doing extra work here and collect the message attribute too.
+                            attributes.extend(struct_item.attrs.iter().cloned());
+
+                            // remove all attribute for message type.
+                            (*struct_item).attrs = vec![];
                         }
 
-                        let result_typ = syn::parse_str::<syn::Type>(&test)
-                            .unwrap_or_else(|_| panic!("Failed parsing string: {} to type", test));
-
-                        message_params.push((
-                            struct_item.ident.clone(),
-                            struct_item.generics.clone(),
-                            result_typ,
-                            is_blocking,
-                        ));
-
-                        // ToDo: We are doing extra work here and collect the message attribute too.
-                        attributes.extend(struct_item.attrs.iter().cloned());
-
-                        // remove all attribute for message type.
-                        (*struct_item).attrs = vec![];
+                        if let Some(_attr) = is_ident(&struct_item.attrs, "actor") {
+                            actor_ident_str = struct_item.ident.to_string();
+                        }
                     }
+                    Item::Type(type_item) => {
+                        // before we throw them we collect all the type, field and message's return type
+                        // attributes other than message are collected as well.
+                        if let Some(attr) = is_ident(&type_item.attrs, "message") {
+                            let mut test: String = attr
+                                .tokens
+                                .to_string()
+                                .split('=')
+                                .collect::<Vec<&str>>()
+                                .pop()
+                                .expect("#[message(result = \"T\")] is missing")
+                                .chars()
+                                .filter(|char| char != &'\"' && char != &' ')
+                                .collect();
 
-                    if let Some(_attr) = is_ident(&struct_item.attrs, "actor") {
-                        actor_ident_str = struct_item.ident.to_string();
+                            test.pop();
+
+                            let is_blocking = test.contains("blocking");
+
+                            if is_blocking {
+                                for _i in 0..9 {
+                                    test.pop();
+                                }
+                            }
+
+                            let result_typ =
+                                syn::parse_str::<syn::Type>(&test).unwrap_or_else(|_| {
+                                    panic!("Failed parsing string: {} to type", test)
+                                });
+
+                            message_params.push((
+                                type_item.ident.clone(),
+                                type_item.generics.clone(),
+                                result_typ,
+                                is_blocking,
+                            ));
+
+                            // ToDo: We are doing extra work here and collect the message attribute too.
+                            attributes.extend(type_item.attrs.iter().cloned());
+
+                            // remove all attribute for message type.
+                            (*type_item).attrs = vec![];
+                        }
+
+                        if let Some(_attr) = is_ident(&type_item.attrs, "actor") {
+                            actor_ident_str = type_item.ident.to_string();
+                        }
                     }
+                    _ => (),
                 }
             }
 

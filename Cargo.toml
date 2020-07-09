@@ -47,6 +47,10 @@ path = "examples/no_macro.rs"
 name = "stream"
 path = "examples/stream.rs"
 
+[[example]]
+name = "type_alias"
+path = "examples/type_alias.rs"
+
 [features]
 default = ["tokio-runtime"]
 tokio-runtime = ["tokio/rt-threaded", "tokio/sync", "tokio/time"]
