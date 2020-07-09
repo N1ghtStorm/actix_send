@@ -12,7 +12,7 @@ use futures_util::stream::Stream;
 
 use crate::actor::{Actor, ActorState};
 use crate::builder::{Sender, WeakSender};
-use crate::context::ChannelMessage;
+use crate::context::ContextMessage;
 use crate::error::ActixSendError;
 use crate::object::FutureResultObjectContainer;
 use crate::stream::ActorStream;
@@ -93,7 +93,7 @@ where
     {
         let (tx, rx) = channel::<A::Result>();
 
-        let channel_message = ChannelMessage::Instant(Some(tx), msg.into());
+        let channel_message = ContextMessage::Instant(Some(tx), msg.into());
 
         self.tx.send(channel_message).await?;
 
@@ -104,7 +104,7 @@ where
 
     /// Send a message to actor and ignore the result.
     pub fn do_send(&self, msg: impl Into<A::Message>) {
-        let msg = ChannelMessage::Instant(None, msg.into());
+        let msg = ContextMessage::Instant(None, msg.into());
         let this = self.tx.clone();
         runtime::spawn(async move {
             let _ = this.send(msg).await;
@@ -120,7 +120,7 @@ where
         msg: impl Into<A::Message>,
         delay: Duration,
     ) -> Result<(), ActixSendError> {
-        let msg = ChannelMessage::Delayed(msg.into(), delay);
+        let msg = ContextMessage::Delayed(msg.into(), delay);
         self.tx.send(msg).await?;
         Ok(())
     }
@@ -129,10 +129,7 @@ where
     ///
     /// *. Item of the stream must be actor's message type.
     #[must_use = "futures do nothing unless you `.await` or poll them"]
-    pub fn send_stream<S, I>(
-        &self,
-        stream: S,
-    ) -> impl Stream<Item = Result<<I as MapResult<A::Result>>::Output, ActixSendError>>
+    pub fn send_stream<S, I>(&self, stream: S) -> ActorStream<A, S, I>
     where
         S: Stream<Item = I>,
         I: Into<A::Message> + MapResult<A::Result> + 'static,
@@ -169,7 +166,7 @@ macro_rules! address_run {
                 let object = crate::object::FutureObject(f, PhantomData, PhantomData).pack();
 
                 self.tx
-                    .send(ChannelMessage::InstantDynamic(Some(tx), object))
+                    .send(ContextMessage::InstantDynamic(Some(tx), object))
                     .await?;
 
                 rx.await?.unpack::<R>().ok_or(ActixSendError::TypeCast)
@@ -181,7 +178,7 @@ macro_rules! address_run {
                 F: FnMut(&mut A) -> Pin<Box<dyn Future<Output = ()> $( + $send)* + '_>> + Send + 'static,
             {
                 let object = crate::object::FutureObject(f, PhantomData, PhantomData).pack();
-                let msg = ChannelMessage::InstantDynamic(None, object);
+                let msg = ContextMessage::InstantDynamic(None, object);
 
                 let this = self.tx.clone();
                 runtime::spawn(async move {
@@ -200,7 +197,7 @@ macro_rules! address_run {
                 let object = crate::object::FutureObject(f, PhantomData, PhantomData).pack();
 
                 self.tx
-                    .send(ChannelMessage::DelayedDynamic(object, delay))
+                    .send(ContextMessage::DelayedDynamic(object, delay))
                     .await?;
 
                 Ok(())
@@ -225,7 +222,7 @@ macro_rules! address_run {
                 let object = crate::object::FutureObject(f, PhantomData, PhantomData).pack();
 
                 self.tx
-                    .send(ChannelMessage::Interval(tx, object, dur))
+                    .send(ContextMessage::IntervalFutureRegister(tx, object, dur))
                     .await?;
 
                 Ok(rx.await?)

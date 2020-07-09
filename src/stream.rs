@@ -9,11 +9,11 @@ use pin_project::pin_project;
 use crate::actor::Actor;
 use crate::address::MapResult;
 use crate::builder::Sender;
-use crate::context::ChannelMessage;
+use crate::context::ContextMessage;
 use crate::error::ActixSendError;
 
 #[pin_project]
-pub(crate) struct ActorStream<A, S, I>
+pub struct ActorStream<A, S, I>
 where
     A: Actor,
     S: Stream<Item = I>,
@@ -95,7 +95,7 @@ where
 {
     let (tx, rx) = channel::<A::Result>();
 
-    let msg = ChannelMessage::Instant(Some(tx), item.into());
+    let msg = ContextMessage::Instant(Some(tx), item.into());
     sender.send(msg).await?;
 
     let res = rx.await?;

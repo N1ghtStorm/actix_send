@@ -16,7 +16,7 @@ where
     A: Actor + Handler + 'static,
 {
     tx: WeakSender<A>,
-    rx: Receiver<ChannelMessage<A>>,
+    rx: Receiver<ContextMessage<A>>,
     actor: A,
     state: ActorState<A>,
 }
@@ -27,7 +27,7 @@ where
 {
     pub(crate) fn new(
         tx: WeakSender<A>,
-        rx: Receiver<ChannelMessage<A>>,
+        rx: Receiver<ContextMessage<A>>,
         actor: A,
         state: ActorState<A>,
     ) -> Self {
@@ -39,7 +39,7 @@ where
         }
     }
 
-    fn delayed_msg(&self, msg: ChannelMessage<A>, dur: Duration) {
+    fn delayed_msg(&self, msg: ContextMessage<A>, dur: Duration) {
         if let Some(tx) = self.tx.upgrade() {
             let handle_delay_on_shutdown = self.state.handle_delay_on_shutdown();
 
@@ -66,34 +66,34 @@ where
 
             while let Ok(msg) = self.rx.recv().await {
                 match msg {
-                    ChannelMessage::Instant(tx, msg) => {
+                    ContextMessage::Instant(tx, msg) => {
                         let res = self.actor.handle(msg).await;
                         if let Some(tx) = tx {
                             let _ = tx.send(res);
                         }
                     }
-                    ChannelMessage::InstantDynamic(tx, mut fut) => {
+                    ContextMessage::InstantDynamic(tx, mut fut) => {
                         let res = fut.handle(&mut self.actor).await;
                         if let Some(tx) = tx {
                             let _ = tx.send(res);
                         }
                     }
-                    ChannelMessage::Delayed(msg, dur) => {
-                        self.delayed_msg(ChannelMessage::Instant(None, msg), dur)
+                    ContextMessage::Delayed(msg, dur) => {
+                        self.delayed_msg(ContextMessage::Instant(None, msg), dur)
                     }
-                    ChannelMessage::DelayedDynamic(fut, dur) => {
-                        self.delayed_msg(ChannelMessage::InstantDynamic(None, fut), dur)
+                    ContextMessage::DelayedDynamic(fut, dur) => {
+                        self.delayed_msg(ContextMessage::InstantDynamic(None, fut), dur)
                     }
-                    ChannelMessage::IntervalFuture(idx) => {
+                    ContextMessage::IntervalFutureRun(idx) => {
                         let mut guard = self.state.interval_futures.lock().await;
                         if let Some(fut) = guard.get_mut(&idx) {
                             let _ = fut.handle(&mut self.actor).await;
                         }
                     }
-                    ChannelMessage::IntervalFutureRemove(idx) => {
+                    ContextMessage::IntervalFutureRemove(idx) => {
                         let _ = self.state.interval_futures.remove(idx).await;
                     }
-                    ChannelMessage::Interval(tx, interval_future, dur) => {
+                    ContextMessage::IntervalFutureRegister(tx, interval_future, dur) => {
                         // insert interval future to context and get it's index
                         let index = self.state.interval_futures.insert(interval_future).await;
 
@@ -106,7 +106,7 @@ where
                                 match ctx_tx.upgrade() {
                                     Some(tx) => {
                                         let _ =
-                                            tx.send(ChannelMessage::IntervalFuture(index)).await;
+                                            tx.send(ContextMessage::IntervalFutureRun(index)).await;
                                     }
                                     None => break,
                                 }
@@ -136,7 +136,7 @@ where
     }
 }
 
-pub(crate) enum ChannelMessage<A>
+pub(crate) enum ContextMessage<A>
 where
     A: Actor,
 {
@@ -147,11 +147,11 @@ where
     ),
     Delayed(A::Message, Duration),
     DelayedDynamic(FutureObjectContainer<A>, Duration),
-    Interval(
+    IntervalFutureRegister(
         OneshotSender<FutureHandler<A>>,
         FutureObjectContainer<A>,
         Duration,
     ),
-    IntervalFuture(usize),
+    IntervalFutureRun(usize),
     IntervalFutureRemove(usize),
 }

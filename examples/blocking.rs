@@ -33,7 +33,7 @@ async fn main() {
         );
     };
 
-    let _ = tokio::spawn(futures::future::join(f1, f2)).await;
+    let _ = tokio::spawn(futures_util::future::join(f1, f2)).await;
 }
 
 #[actor_mod]

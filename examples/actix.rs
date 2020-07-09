@@ -1,5 +1,7 @@
 #[cfg(feature = "actix-runtime")]
-use {crate::my_actor::*, actix_send::prelude::*, std::rc::Rc, std::time::Duration};
+use {
+    crate::my_actor::*, actix::Arbiter, actix_send::prelude::*, std::rc::Rc, std::time::Duration,
+};
 
 /*
     When enabling actix-runtime we have more freedom in our handle methods at the exchange of a
@@ -66,11 +68,7 @@ fn main() {
         */
 
         // build a set of arbiters.
-        let mut arbiters = Vec::new();
-        for _ in 0..6 {
-            let arbiter = actix_rt::Arbiter::new();
-            arbiters.push(arbiter);
-        }
+        let arbiters = (0..6).map(|_| Arbiter::new()).collect::<Vec<Arbiter>>();
 
         /*
             Start multiple actors on the given arbiters. The actors would try to spawn on them evenly.

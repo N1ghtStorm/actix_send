@@ -33,7 +33,8 @@ where
     ///
     /// *. This would apply to every single instance of actor(s)
     ///
-    /// 8. This would apply to restart process if `Builder::restart_on_err` is set to true
+    /// *. This would apply to restart process if `Builder::restart_on_err` is set to true
+    #[allow(unused_variables)]
     fn on_start(&mut self) {}
 
     /// Called before actor stop. Actor's context would be passed as argument.

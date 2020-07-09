@@ -4,7 +4,7 @@ use async_channel::SendError;
 use futures_channel::oneshot::Canceled;
 
 use crate::actor::Actor;
-use crate::context::ChannelMessage;
+use crate::context::ContextMessage;
 
 pub enum ActixSendError {
     Canceled,
@@ -50,11 +50,11 @@ impl From<Canceled> for ActixSendError {
     }
 }
 
-impl<A> From<SendError<ChannelMessage<A>>> for ActixSendError
+impl<A> From<SendError<ContextMessage<A>>> for ActixSendError
 where
     A: Actor,
 {
-    fn from(_err: SendError<ChannelMessage<A>>) -> Self {
+    fn from(_err: SendError<ContextMessage<A>>) -> Self {
         ActixSendError::Closed
     }
 }

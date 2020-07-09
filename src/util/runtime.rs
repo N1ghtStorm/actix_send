@@ -69,7 +69,7 @@ spawn!(
 
 #[cfg(feature = "async-std-runtime")]
 #[cfg(not(any(feature = "tokio-runtime", feature = "actix-runtime")))]
-use futures::StreamExt;
+use futures_util::stream::StreamExt;
 
 #[allow(unused_variables)]
 pub async fn spawn_blocking<F, T>(f: F) -> Result<T, ActixSendError>

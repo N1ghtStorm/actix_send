@@ -9,16 +9,16 @@ use std::pin::Pin;
 
 use crate::actor::Actor;
 
+// a container for FutureTrait object
+pub(crate) struct FutureObjectContainer<A>
+where
+    A: Actor,
+{
+    func: Box<dyn FutureTrait<A> + Send>,
+}
+
 macro_rules! object {
     ($($send:ident)*) => {
-        // a container for FutureTrait object
-        pub(crate) struct FutureObjectContainer<A>
-        where
-            A: Actor,
-        {
-            func: Box<dyn FutureTrait<A> + Send>,
-        }
-
         impl<A> FutureObjectContainer<A>
         where
             A: Actor,
@@ -86,11 +86,6 @@ macro_rules! object {
                 })
             }
         }
-
-        // A type contain the result trait object.
-        pub(crate) struct FutureResultObjectContainer {
-            result: Box<dyn FutureResultTrait + Send>,
-        }
     };
 }
 
@@ -99,6 +94,11 @@ object!(Send);
 
 #[cfg(feature = "actix-runtime")]
 object!();
+
+// A type contain the result trait object.
+pub(crate) struct FutureResultObjectContainer {
+    result: Box<dyn FutureResultTrait + Send>,
+}
 
 impl FutureResultObjectContainer {
     fn pack<R>(r: R) -> Self

@@ -2,7 +2,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use actix_send::prelude::*;
-use futures::{Stream, StreamExt};
+use futures_util::stream::{Stream, StreamExt};
 
 use crate::my_actor::*;
 
@@ -39,7 +39,7 @@ async fn main() {
         }
     };
 
-    futures::future::join(future1, future2).await;
+    futures_util::future::join(future1, future2).await;
 }
 
 #[actor_mod]

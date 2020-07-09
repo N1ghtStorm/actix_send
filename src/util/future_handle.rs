@@ -10,7 +10,7 @@ use futures_util::future::Either;
 
 use crate::actor::Actor;
 use crate::builder::WeakSender;
-use crate::context::ChannelMessage;
+use crate::context::ContextMessage;
 use crate::util::runtime;
 
 macro_rules! spawn_cancel {
@@ -117,7 +117,7 @@ where
             if let Some(tx) = tx.upgrade() {
                 let index = *index;
                 runtime::spawn(async move {
-                    let _ = tx.send(ChannelMessage::IntervalFutureRemove(index)).await;
+                    let _ = tx.send(ContextMessage::IntervalFutureRemove(index)).await;
                 });
             }
         }

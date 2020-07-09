@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use actix_send::prelude::*;
-use futures::StreamExt;
+use futures_util::stream::StreamExt;
 
 use crate::my_actor::*;
 

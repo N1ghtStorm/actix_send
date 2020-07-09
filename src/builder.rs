@@ -4,7 +4,7 @@ use async_channel::{unbounded, SendError};
 
 use crate::actor::{Actor, ActorState, Handler};
 use crate::address::Address;
-use crate::context::{ActorContext, ChannelMessage};
+use crate::context::{ActorContext, ContextMessage};
 
 pub struct Builder<A>
 where
@@ -69,7 +69,7 @@ where
     pub fn start(self) -> Address<A> {
         let num = self.config.num;
 
-        let (tx, rx) = unbounded::<ChannelMessage<A>>();
+        let (tx, rx) = unbounded::<ContextMessage<A>>();
         let tx = Sender {
             inner: Arc::new(tx),
         };
@@ -100,7 +100,7 @@ where
     pub fn start_with_arbiter(self, arbiters: &[actix_rt::Arbiter]) -> Address<A> {
         let num = self.config.num;
 
-        let (tx, rx) = unbounded::<ChannelMessage<A>>();
+        let (tx, rx) = unbounded::<ContextMessage<A>>();
         let tx = Sender {
             inner: Arc::new(tx),
         };
@@ -152,7 +152,7 @@ pub struct Sender<A>
 where
     A: Actor,
 {
-    inner: Arc<async_channel::Sender<ChannelMessage<A>>>,
+    inner: Arc<async_channel::Sender<ContextMessage<A>>>,
 }
 
 impl<A> Clone for Sender<A>
@@ -178,8 +178,8 @@ where
 
     pub(crate) async fn send(
         &self,
-        msg: ChannelMessage<A>,
-    ) -> Result<(), SendError<ChannelMessage<A>>> {
+        msg: ContextMessage<A>,
+    ) -> Result<(), SendError<ContextMessage<A>>> {
         self.inner.send(msg).await
     }
 }
@@ -188,7 +188,7 @@ pub struct WeakSender<A>
 where
     A: Actor,
 {
-    inner: Weak<async_channel::Sender<ChannelMessage<A>>>,
+    inner: Weak<async_channel::Sender<ContextMessage<A>>>,
 }
 
 impl<A> Clone for WeakSender<A>

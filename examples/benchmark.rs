@@ -109,7 +109,7 @@ fn main() {
                         }
 
                         let start = Instant::now();
-                        futures::future::join_all(join).await;
+                        futures_util::future::join_all(join).await;
                         println!(
                             "total runtime is {:#?}",
                             Instant::now().duration_since(start)
@@ -126,7 +126,7 @@ fn main() {
                         }
 
                         let start = Instant::now();
-                        futures::future::join_all(join).await;
+                        futures_util::future::join_all(join).await;
                         println!(
                             "total runtime is {:#?}",
                             Instant::now().duration_since(start)
@@ -158,7 +158,7 @@ fn main() {
                 }
 
                 let start = Instant::now();
-                let _ = futures::future::join_all(join).await;
+                let _ = futures_util::future::join_all(join).await;
                 println!(
                     "total runtime is {:#?}",
                     Instant::now().duration_since(start)

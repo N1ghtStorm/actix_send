@@ -18,7 +18,7 @@
 //!     let actor = MyActor::create(|| MyActor { state });
 //!
 //!     // build and start the actor(s).
-//!     let address = actor.build().start();
+//!     let address: Address<MyActor> = actor.build().start();
 //!
 //!     // construct new messages.
 //!     let msg = MyMessage {
@@ -26,8 +26,7 @@
 //!     };
 //!
 //!     // use address to send messages to actor and await on result.
-//!     let res = address.send(msg).await;
-//!     println!("We got result for Message1\r\nResult is: {:?}", res);
+//!     let res: Result<u8, ActixSendError> = address.send(msg).await;
 //! }
 //!
 //! /*  Implementation of actor */
@@ -52,9 +51,7 @@
 //!     #[handler]
 //!     impl Handler for MyActor {
 //!         // The msg and handle's return type must match former message macro's result type.
-//!         async fn handle(&mut self, msg: MyMessage) -> u8 {
-//!             println!("Actor State : {}", self.state);
-//!             println!("We got an Message.\r\nfrom : {}", msg.from);
+//!         async fn handle(&mut self, _msg: MyMessage) -> u8 {
 //!             8
 //!         }
 //!     }
