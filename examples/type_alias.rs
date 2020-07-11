@@ -41,7 +41,7 @@ pub mod actor2 {
     pub type Message1 = super::Message;
 
     #[handler]
-    impl Handler for NonSharedActor {
+    impl Handler for Actor2 {
         async fn handle(&mut self, _msg: Message1) -> usize {
             3
         }

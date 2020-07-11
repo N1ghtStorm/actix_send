@@ -35,13 +35,6 @@ impl<A> Builder<A>
 where
     A: Actor + Handler + Clone,
 {
-    pub fn new(actor: A) -> Self {
-        Self {
-            actor,
-            config: Default::default(),
-        }
-    }
-
     /// Build multiple actors with the num passed.
     ///
     /// Every actor instance would be a `Clone` of the original one.

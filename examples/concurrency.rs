@@ -102,11 +102,14 @@ async fn main() {
     let address = actor.build().num(12).start();
 
     // send messages
-    for _i in 0..1_000 {
+    let futures = (0..1_000)
         // Both shared_actor and non_shared_actor have the same type Message1
         // and we can specific call the one we want with a type path.
-        let _ = address.send(shared_actor::Message1).await.unwrap();
-    }
+        .map(|_| address.send(shared_actor::Message1))
+        .collect::<Vec<_>>();
+
+    // send messages
+    futures_util::future::join_all(futures).await;
 
     let info = address.send(Message2).await.unwrap();
 
@@ -119,12 +122,14 @@ async fn main() {
 
     let address2 = actor2.build().num(12).start();
 
-    // send messages
-    for _i in 0..1_000 {
+    let futures = (0..1_000)
         // Both shared_actor and non_shared_actor have the same type Message1
         // and we can specific call the one we want with a type path.
-        let _ = address2.send(non_shared_actor::Message1).await.unwrap();
-    }
+        .map(|_| address2.send(non_shared_actor::Message1))
+        .collect::<Vec<_>>();
+
+    // send messages
+    futures_util::future::join_all(futures).await;
 
     let state = address2.send(non_shared_actor::Message1).await.unwrap();
     println!("State is: {}, should be smaller than 1000", state);

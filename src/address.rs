@@ -29,29 +29,6 @@ where
     _a: PhantomData<A>,
 }
 
-impl<A> Address<A>
-where
-    A: Actor,
-{
-    pub(crate) fn new(tx: Sender<A>, state: ActorState<A>) -> Self {
-        Self {
-            strong_count: Arc::new(AtomicUsize::new(1)),
-            tx,
-            state,
-            _a: PhantomData,
-        }
-    }
-
-    pub fn downgrade(&self) -> WeakAddress<A> {
-        WeakAddress {
-            strong_count: self.strong_count.clone(),
-            tx: self.tx.downgrade(),
-            state: self.state.clone(),
-            _a: PhantomData,
-        }
-    }
-}
-
 impl<A> Clone for Address<A>
 where
     A: Actor,
@@ -82,7 +59,36 @@ impl<A> Address<A>
 where
     A: Actor,
 {
-    /// Send a message to actor and await for result.
+    pub(crate) fn new(tx: Sender<A>, state: ActorState<A>) -> Self {
+        Self {
+            strong_count: Arc::new(AtomicUsize::new(1)),
+            tx,
+            state,
+            _a: PhantomData,
+        }
+    }
+
+    /// Downgrade to a Weak version of address which can be upgraded to a Address later.
+    pub fn downgrade(&self) -> WeakAddress<A> {
+        WeakAddress {
+            strong_count: self.strong_count.clone(),
+            tx: self.tx.downgrade(),
+            state: self.state.clone(),
+            _a: PhantomData,
+        }
+    }
+
+    /// The number of currently active actors for the given address.
+    pub fn current_active(&self) -> usize {
+        self.state.current_active()
+    }
+}
+
+impl<A> Address<A>
+where
+    A: Actor,
+{
+    /// Send a message to actor(s) and await for result.
     #[must_use = "futures do nothing unless you `.await` or poll them"]
     pub async fn send<M>(
         &self,
@@ -102,7 +108,7 @@ where
         M::map(res)
     }
 
-    /// Send a message to actor and ignore the result.
+    /// Send a message to actor(s) and ignore the result.
     pub fn do_send(&self, msg: impl Into<A::Message>) {
         let msg = ContextMessage::Instant(None, msg.into());
         let this = self.tx.clone();
@@ -125,7 +131,7 @@ where
         Ok(())
     }
 
-    /// Send a stream to actor and return a new stream applied with `Handler::handle` method.
+    /// Send a stream to actor(s) and return a new stream applied with `Handler::handle` method.
     ///
     /// *. Item of the stream must be actor's message type.
     #[must_use = "futures do nothing unless you `.await` or poll them"]
@@ -137,9 +143,12 @@ where
         ActorStream::new(stream, self.tx.clone())
     }
 
-    /// The number of currently active actors for the given address.
-    pub fn current_active(&self) -> usize {
-        self.state.current_active()
+    /// Close one actor for this address.
+    pub async fn close_one(&self) -> Result<(), ActixSendError> {
+        let (tx, rx) = channel();
+        let msg = ContextMessage::ManualShutDown(tx);
+        self.tx.send(msg).await?;
+        Ok(rx.await?)
     }
 }
 
@@ -149,7 +158,7 @@ macro_rules! address_run {
         where
             A: Actor,
         {
-            /// Run a boxed future on actor.
+            /// Run a boxed future on actor(s).
             ///
             /// This function use dynamic dispatches to interact with actor.
             ///
@@ -203,7 +212,7 @@ macro_rules! address_run {
                 Ok(())
             }
 
-            /// Register an interval future for actor. An actor can have multiple interval futures registered.
+            /// Register an interval future for actor(s). A set of actor(s) can have multiple interval futures registered.
             ///
             /// a `FutureHandler` would return that can be used to cancel it.
             ///

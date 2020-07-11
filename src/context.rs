@@ -17,6 +17,7 @@ where
 {
     tx: WeakSender<A>,
     rx: Receiver<ContextMessage<A>>,
+    manual_shutdown: bool,
     actor: A,
     state: ActorState<A>,
 }
@@ -34,6 +35,7 @@ where
         Self {
             tx,
             rx,
+            manual_shutdown: false,
             actor,
             state,
         }
@@ -66,6 +68,12 @@ where
 
             while let Ok(msg) = self.rx.recv().await {
                 match msg {
+                    ContextMessage::ManualShutDown(tx) => {
+                        if let Ok(_) = tx.send(()) {
+                            self.manual_shutdown = true;
+                            break;
+                        }
+                    }
                     ContextMessage::Instant(tx, msg) => {
                         let res = self.actor.handle(msg).await;
                         if let Some(tx) = tx {
@@ -127,7 +135,7 @@ where
             }
 
             // dec_active will return false if the actors are already shutdown.
-            if self.state.dec_active() && self.state.restart_on_err() {
+            if self.state.dec_active() && self.state.restart_on_err() && !self.manual_shutdown {
                 return self.spawn_loop();
             };
 
@@ -140,6 +148,7 @@ pub(crate) enum ContextMessage<A>
 where
     A: Actor,
 {
+    ManualShutDown(OneshotSender<()>),
     Instant(Option<OneshotSender<A::Result>>, A::Message),
     InstantDynamic(
         Option<OneshotSender<FutureResultObjectContainer>>,
