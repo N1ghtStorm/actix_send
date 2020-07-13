@@ -26,7 +26,6 @@ where
     strong_count: Arc<AtomicUsize>,
     tx: Sender<A>,
     state: ActorState<A>,
-    _a: PhantomData<A>,
 }
 
 impl<A> Clone for Address<A>
@@ -39,7 +38,6 @@ where
             strong_count: self.strong_count.clone(),
             tx: self.tx.clone(),
             state: self.state.clone(),
-            _a: PhantomData,
         }
     }
 }
@@ -65,7 +63,6 @@ where
             strong_count: self.strong_count.clone(),
             tx: self.tx.downgrade(),
             state: self.state.clone(),
-            _a: PhantomData,
         }
     }
 
@@ -79,7 +76,6 @@ where
             strong_count: Arc::new(AtomicUsize::new(1)),
             tx,
             state,
-            _a: PhantomData,
         }
     }
 
@@ -255,12 +251,11 @@ address_run!();
 
 pub struct WeakAddress<A>
 where
-    A: Actor + 'static,
+    A: Actor,
 {
     strong_count: Arc<AtomicUsize>,
     tx: WeakSender<A>,
     state: ActorState<A>,
-    _a: PhantomData<A>,
 }
 
 impl<A> WeakAddress<A>
@@ -274,7 +269,6 @@ where
                 strong_count: self.strong_count,
                 tx: sender,
                 state: self.state,
-                _a: PhantomData,
             }
         })
     }

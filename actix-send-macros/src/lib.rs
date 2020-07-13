@@ -14,7 +14,10 @@ use syn::{
     TypePath, Variant, VisPublic, Visibility,
 };
 
+use crate::message::{ActorInfo, HandleMethodInfo};
 use quote::quote;
+
+mod message;
 
 #[proc_macro_attribute]
 pub fn actor(meta: TokenStream, input: TokenStream) -> TokenStream {
@@ -1151,6 +1154,54 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
 
             let expand = quote! {
                 #mod_item
+            };
+
+            expand.into()
+        }
+        _ => unreachable!("#[actor_with_messages] must be used on a mod."),
+    }
+}
+
+#[proc_macro_attribute]
+pub fn handler_v2(_meta: TokenStream, input: TokenStream) -> TokenStream {
+    let item = syn::parse_macro_input!(input as Item);
+
+    match item {
+        Item::Impl(impl_item) => {
+            // get actor ident.
+            let actor_ident = match impl_item.self_ty.as_ref() {
+                Type::Path(ty_path) => ty_path.path.get_ident().unwrap(),
+                _ => unreachable!("#[handler_v2] must be used on impl ActorTypePath."),
+            };
+
+            let mut actor_info = ActorInfo::new(actor_ident);
+
+            let handle_info = impl_item
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    ImplItem::Method(method) => Some(HandleMethodInfo::new(method)),
+                    _ => None,
+                })
+                .collect::<Vec<HandleMethodInfo>>();
+
+            actor_info
+                .enum_variants(&handle_info)
+                .from_trait(&handle_info)
+                .map_result_trait(&handle_info)
+                .handler_trait(&handle_info);
+            // .send_method_wrapper(&handle_info);
+
+            let message_enum = &actor_info.message_enum;
+            let result_enum = &actor_info.result_enum;
+            let items = &actor_info.items;
+
+            let expand = quote! {
+
+                #message_enum
+                #result_enum
+
+                #(#items)*
             };
 
             expand.into()

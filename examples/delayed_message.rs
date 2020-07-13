@@ -1,7 +1,9 @@
+use std::time::Duration;
+
+use actix_send::prelude::*;
+
 use crate::my_actor::*;
 use crate::my_actor2::*;
-use actix_send::prelude::*;
-use std::time::Duration;
 
 #[tokio::main]
 async fn main() {
