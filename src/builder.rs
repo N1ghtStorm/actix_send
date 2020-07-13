@@ -1,10 +1,13 @@
 use std::sync::{Arc, Weak};
+use std::time::Duration;
 
 use async_channel::{unbounded, SendError};
 
 use crate::actor::{Actor, ActorState, Handler};
 use crate::address::Address;
 use crate::context::{ActorContext, ContextMessage};
+use crate::error::ActixSendError;
+use crate::util::runtime;
 
 pub struct Builder<A>
 where
@@ -19,6 +22,7 @@ pub struct Config {
     pub num: usize,
     pub restart_on_err: bool,
     pub handle_delayed_on_shutdown: bool,
+    pub timeout: Duration,
 }
 
 impl Default for Config {
@@ -27,6 +31,7 @@ impl Default for Config {
             num: 1,
             restart_on_err: false,
             handle_delayed_on_shutdown: false,
+            timeout: Duration::from_secs(10),
         }
     }
 }
@@ -40,6 +45,8 @@ where
     /// Every actor instance would be a `Clone` of the original one.
     ///
     /// All the actors would steal work from a single `async-channel`.
+    ///
+    /// Default is 1
     pub fn num(mut self, num: usize) -> Self {
         Self::check_num(num, 0);
         self.config.num = num;
@@ -47,14 +54,26 @@ where
     }
 
     /// Notify the actor(s) to handle all delayed messages/futures before it's shutdown.
+    ///
+    /// Default is false.
     pub fn handle_delayed_on_shutdown(mut self) -> Self {
         self.config.handle_delayed_on_shutdown = true;
         self
     }
 
     /// Notify the actor(s) to restart if it exits on error.
+    ///
+    /// Default is false
     pub fn restart_on_err(mut self) -> Self {
         self.config.restart_on_err = true;
+        self
+    }
+
+    /// Set the timeout of sending a message.
+    ///
+    /// Default is 10 seconds
+    pub fn timeout(mut self, duration: Duration) -> Self {
+        self.config.timeout = duration;
         self
     }
 
@@ -174,6 +193,16 @@ where
         msg: ContextMessage<A>,
     ) -> Result<(), SendError<ContextMessage<A>>> {
         self.inner.send(msg).await
+    }
+
+    pub(crate) async fn send_timeout(
+        &self,
+        msg: ContextMessage<A>,
+        dur: Duration,
+    ) -> Result<(), ActixSendError> {
+        let fut = self.inner.send(msg);
+        runtime::timeout(dur, fut).await??;
+        Ok(())
     }
 }
 

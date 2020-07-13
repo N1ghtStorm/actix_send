@@ -69,7 +69,7 @@ where
             while let Ok(msg) = self.rx.recv().await {
                 match msg {
                     ContextMessage::ManualShutDown(tx) => {
-                        if let Ok(_) = tx.send(()) {
+                        if tx.send(()).is_ok() {
                             self.manual_shutdown = true;
                             break;
                         }

@@ -2,6 +2,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc, Mutex,
 };
+use std::time::Duration;
 
 use crate::builder::{Builder, Config};
 use crate::interval::IntervalFutureSet;
@@ -137,6 +138,10 @@ where
     pub(crate) fn current_active(&self) -> usize {
         let state = self.active.load(Ordering::SeqCst);
         state >> 1
+    }
+
+    pub(crate) fn timeout(&self) -> Duration {
+        self.config.timeout
     }
 
     pub(crate) fn shutdown(&self) {

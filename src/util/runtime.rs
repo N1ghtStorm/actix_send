@@ -9,6 +9,7 @@ macro_rules! spawn {
         $delay_fn: path,
         $interval_fn: path,
         $interval_ty: path,
+        $timeout_fn: path,
         $tick_fn: ident
         $(, $send:ident)*
     ) => {
@@ -32,6 +33,13 @@ macro_rules! spawn {
         pub(crate) async fn tick(interval: &mut $interval_ty) {
             let _ = interval.$tick_fn().await;
         }
+
+        pub(crate) async fn timeout<Fut, R>(dur: Duration, fut: Fut) -> Result<R, ActixSendError>
+        where
+            Fut: Future<Output=R> $( + $send)*,
+        {
+            $timeout_fn(dur, fut).await.map_err(|_|ActixSendError::Timeout)
+        }
     };
 }
 
@@ -42,6 +50,7 @@ spawn!(
     tokio::time::delay_for,
     tokio::time::interval,
     tokio::time::Interval,
+    tokio::time::timeout,
     tick,
     Send
 );
@@ -53,6 +62,7 @@ spawn!(
     async_std::task::sleep,
     async_std::stream::interval,
     async_std::stream::Interval,
+    async_std::future::timeout,
     next,
     Send
 );
@@ -64,6 +74,7 @@ spawn!(
     actix_rt::time::delay_for,
     actix_rt::time::interval,
     actix_rt::time::Interval,
+    actix_rt::time::timeout,
     tick
 );
 

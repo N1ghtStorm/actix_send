@@ -59,15 +59,6 @@ impl<A> Address<A>
 where
     A: Actor,
 {
-    pub(crate) fn new(tx: Sender<A>, state: ActorState<A>) -> Self {
-        Self {
-            strong_count: Arc::new(AtomicUsize::new(1)),
-            tx,
-            state,
-            _a: PhantomData,
-        }
-    }
-
     /// Downgrade to a Weak version of address which can be upgraded to a Address later.
     pub fn downgrade(&self) -> WeakAddress<A> {
         WeakAddress {
@@ -81,6 +72,22 @@ where
     /// The number of currently active actors for the given address.
     pub fn current_active(&self) -> usize {
         self.state.current_active()
+    }
+
+    pub(crate) fn new(tx: Sender<A>, state: ActorState<A>) -> Self {
+        Self {
+            strong_count: Arc::new(AtomicUsize::new(1)),
+            tx,
+            state,
+            _a: PhantomData,
+        }
+    }
+
+    fn send_timeout(
+        &self,
+        msg: ContextMessage<A>,
+    ) -> impl Future<Output = Result<(), ActixSendError>> + '_ {
+        self.tx.send_timeout(msg, self.state.timeout())
     }
 }
 
@@ -99,9 +106,9 @@ where
     {
         let (tx, rx) = channel::<A::Result>();
 
-        let channel_message = ContextMessage::Instant(Some(tx), msg.into());
+        let msg = ContextMessage::Instant(Some(tx), msg.into());
 
-        self.tx.send(channel_message).await?;
+        self.send_timeout(msg).await?;
 
         let res = rx.await?;
 
@@ -127,7 +134,7 @@ where
         delay: Duration,
     ) -> Result<(), ActixSendError> {
         let msg = ContextMessage::Delayed(msg.into(), delay);
-        self.tx.send(msg).await?;
+        self.send_timeout(msg).await?;
         Ok(())
     }
 
@@ -147,7 +154,7 @@ where
     pub async fn close_one(&self) -> Result<(), ActixSendError> {
         let (tx, rx) = channel();
         let msg = ContextMessage::ManualShutDown(tx);
-        self.tx.send(msg).await?;
+        self.send_timeout(msg).await?;
         Ok(rx.await?)
     }
 }
@@ -174,9 +181,9 @@ macro_rules! address_run {
 
                 let object = crate::object::FutureObject(f, PhantomData, PhantomData).pack();
 
-                self.tx
-                    .send(ContextMessage::InstantDynamic(Some(tx), object))
-                    .await?;
+                let msg = ContextMessage::InstantDynamic(Some(tx), object);
+
+                self.send_timeout(msg).await?;
 
                 rx.await?.unpack::<R>().ok_or(ActixSendError::TypeCast)
             }
@@ -205,9 +212,9 @@ macro_rules! address_run {
             {
                 let object = crate::object::FutureObject(f, PhantomData, PhantomData).pack();
 
-                self.tx
-                    .send(ContextMessage::DelayedDynamic(object, delay))
-                    .await?;
+                let msg = ContextMessage::DelayedDynamic(object, delay);
+
+                self.send_timeout(msg).await?;
 
                 Ok(())
             }
@@ -230,9 +237,9 @@ macro_rules! address_run {
 
                 let object = crate::object::FutureObject(f, PhantomData, PhantomData).pack();
 
-                self.tx
-                    .send(ContextMessage::IntervalFutureRegister(tx, object, dur))
-                    .await?;
+                let msg = ContextMessage::IntervalFutureRegister(tx, object, dur);
+
+                self.send_timeout(msg).await?;
 
                 Ok(rx.await?)
             }
