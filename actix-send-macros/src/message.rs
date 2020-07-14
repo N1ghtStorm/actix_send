@@ -1,8 +1,8 @@
 use syn::{
     export::Span, punctuated::Punctuated, token::Paren, AngleBracketedGenericArguments, Arm, Block,
-    Expr, ExprAsync, ExprAwait, ExprBlock, ExprCall, ExprClosure, ExprMacro, ExprMatch,
-    ExprMethodCall, ExprPath, Field, Fields, FieldsUnnamed, FnArg, GenericArgument, Ident,
-    ImplItem, ImplItemMethod, ImplItemType, Item, ItemEnum, ItemImpl, Local, Macro, MacroDelimiter,
+    Expr, ExprAsync, ExprAwait, ExprBlock, ExprCall, ExprClosure, ExprMacro, ExprMatch, ExprPath,
+    Field, Fields, FieldsUnnamed, FnArg, GenericArgument, Ident, ImplItem, ImplItemMethod,
+    ImplItemType, Item, ItemEnum, ItemImpl, Local, Macro, MacroDelimiter,
     ParenthesizedGenericArguments, Pat, PatIdent, PatTuple, PatTupleStruct, PatType, PatWild, Path,
     PathArguments, PathSegment, Receiver, ReturnType, Signature, Stmt, Type, TypePath, TypeTuple,
     Variant, VisPublic, Visibility,
@@ -630,43 +630,43 @@ impl<'a> ActorInfo<'a> {
                 }));
 
                 // we construct an optional statement is we are wrapping blocking
-                let mut stmt0 = None;
-                if !handle.is_async {
-                    // ToDo: in case async_trait changed.
-                    // *. Here we use a hack. #[async_trait] would transfer
-                    // all self identifier to _self by default so we take use of
-                    // it and map our cloned Self to _self identifier too.
-
-                    let st = Stmt::Local(Local {
-                        attrs: vec![],
-                        let_token: Default::default(),
-                        pat: Pat::Ident(PatIdent {
-                            attrs: vec![],
-                            by_ref: None,
-                            mutability: None,
-                            ident: Ident::new("_self", Span::call_site()),
-                            subpat: None,
-                        }),
-                        init: Some((
-                            Default::default(),
-                            Box::new(Expr::MethodCall(ExprMethodCall {
-                                attrs: vec![],
-                                receiver: Box::new(Expr::Path(ExprPath {
-                                    attrs: vec![],
-                                    qself: None,
-                                    path: path_from_ident_str("self"),
-                                })),
-                                dot_token: Default::default(),
-                                method: Ident::new("clone", Span::call_site()),
-                                turbofish: None,
-                                paren_token: Default::default(),
-                                args: Default::default(),
-                            })),
-                        )),
-                        semi_token: Default::default(),
-                    });
-                    stmt0 = Some(st);
-                };
+                let stmt0 = None;
+                // if !handle.is_async {
+                //     // ToDo: in case async_trait changed.
+                //     // *. Here we use a hack. #[async_trait] would transfer
+                //     // all self identifier to _self by default so we take use of
+                //     // it and map our cloned Self to _self identifier too.
+                //
+                //     let st = Stmt::Local(Local {
+                //         attrs: vec![],
+                //         let_token: Default::default(),
+                //         pat: Pat::Ident(PatIdent {
+                //             attrs: vec![],
+                //             by_ref: None,
+                //             mutability: None,
+                //             ident: Ident::new("_self", Span::call_site()),
+                //             subpat: None,
+                //         }),
+                //         init: Some((
+                //             Default::default(),
+                //             Box::new(Expr::MethodCall(ExprMethodCall {
+                //                 attrs: vec![],
+                //                 receiver: Box::new(Expr::Path(ExprPath {
+                //                     attrs: vec![],
+                //                     qself: None,
+                //                     path: path_from_ident_str("self"),
+                //                 })),
+                //                 dot_token: Default::default(),
+                //                 method: Ident::new("clone", Span::call_site()),
+                //                 turbofish: None,
+                //                 paren_token: Default::default(),
+                //                 args: Default::default(),
+                //             })),
+                //         )),
+                //         semi_token: Default::default(),
+                //     });
+                //     stmt0 = Some(st);
+                // };
 
                 // If the message have blocking attribute we wrap the method in runtime::spawn_blocking
                 let stmt1 = if handle.is_async {

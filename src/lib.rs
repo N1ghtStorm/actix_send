@@ -8,26 +8,50 @@
 //! ```rust
 //! use actix_send::prelude::*;
 //!
-//! use my_actor::*;
+//! // Actor type
+//! #[actor]
+//! pub struct MyActor;
+//!
+//! // message type
+//! pub struct Message;
+//!
+//! // handler implement
+//! #[handler_v2]
+//! impl MyActor {
+//!     // the name of handle method is not important.
+//!     // It's only used to make IDE happy when actually we transform it to Actor::handle
+//!     // method.
+//!     async fn ra_ri_ru_rei_ro(&mut self, _: Message) -> u8 {
+//!         8
+//!     }
+//! }
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     let state = String::from("running");
 //!
-//!     // create an actor instance. The create function would return our Actor instance.
-//!     let actor = MyActor::create(|| MyActor { state });
+//!     // define a builder of our actor. The async closure would return our Actor instance.
+//!     let builder = MyActor::builder(|| async { MyActor });
 //!
-//!     // build and start the actor(s).
-//!     let address: Address<MyActor> = actor.build().start();
+//!     // start actor(s).
+//!     let address: Address<MyActor> = builder.start().await;
 //!
-//!     // construct new messages.
-//!     let msg = MyMessage {
-//!         from: "a simple test".to_string(),
-//!     };
+//!     /*
+//!        send messages to actor.
 //!
-//!     // use address to send messages to actor and await on result.
-//!     let res: Result<u8, ActixSendError> = address.send(msg).await;
+//!        No matter how we name the handle method for a give <MessageType> in impl MyActor
+//!        we can just call Address::send(<MessageType>).
+//!     */
+//!     let res: Result<u8, ActixSendError> = address.send(Message).await;
+//!
+//!     assert_eq!(8, res.unwrap());
 //! }
+//! ```
+//!
+//! # Example for actix style:
+//! ```rust
+//! use actix_send::prelude::*;
+//!
+//! use my_actor::*;
 //!
 //! /*  Implementation of actor */
 //!
@@ -55,6 +79,27 @@
 //!             8
 //!         }
 //!     }
+//! }
+//!
+//! #[tokio::main]
+//! async fn main() {
+//!     
+//!     // define a builder of our actor. The async closure would return our Actor instance.
+//!     let builder = MyActor::builder(|| async {
+//!         let state = String::from("running");
+//!         MyActor { state }
+//!     });
+//!
+//!     // start the actor(s).
+//!     let address: Address<MyActor> = builder.start().await;
+//!
+//!     // construct new message.
+//!     let msg = MyMessage {
+//!         from: "a simple test".to_string(),
+//!     };
+//!
+//!     // use address to send messages to actor and await on result.
+//!     let res: Result<u8, ActixSendError> = address.send(msg).await;
 //! }
 //! ```
 //! # Features

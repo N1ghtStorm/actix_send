@@ -6,12 +6,12 @@ use proc_macro::TokenStream;
 use syn::{
     export::Span, punctuated::Punctuated, token::Paren, AngleBracketedGenericArguments, Arm,
     AttrStyle, Attribute, AttributeArgs, Block, Expr, ExprAsync, ExprAwait, ExprBlock, ExprCall,
-    ExprClosure, ExprMacro, ExprMatch, ExprMethodCall, ExprParen, ExprPath, ExprTuple, Field,
-    Fields, FieldsUnnamed, FnArg, GenericArgument, Generics, Ident, ImplItem, ImplItemMethod,
-    ImplItemType, Item, ItemEnum, ItemImpl, Lit, Local, Macro, MacroDelimiter, Meta, MetaNameValue,
-    NestedMeta, ParenthesizedGenericArguments, Pat, PatIdent, PatTuple, PatTupleStruct, PatType,
-    PatWild, Path, PathArguments, PathSegment, Receiver, ReturnType, Signature, Stmt, Type,
-    TypePath, Variant, VisPublic, Visibility,
+    ExprClosure, ExprMacro, ExprMatch, ExprPath, Field, Fields, FieldsUnnamed, FnArg,
+    GenericArgument, Generics, Ident, ImplItem, ImplItemMethod, ImplItemType, Item, ItemEnum,
+    ItemImpl, Lit, Local, Macro, MacroDelimiter, Meta, MetaNameValue, NestedMeta,
+    ParenthesizedGenericArguments, Pat, PatIdent, PatTuple, PatTupleStruct, PatType, PatWild, Path,
+    PathArguments, PathSegment, Receiver, ReturnType, Signature, Stmt, Type, TypePath, Variant,
+    VisPublic, Visibility,
 };
 
 use crate::message::{ActorInfo, HandleMethodInfo};
@@ -26,96 +26,96 @@ pub fn actor(meta: TokenStream, input: TokenStream) -> TokenStream {
     let args = syn::parse_macro_input!(meta as AttributeArgs);
 
     match item {
-        Item::Struct(mut struct_item) => {
+        Item::Struct(struct_item) => {
             // add derive Clone if it's not presented.
-            let attrs = struct_item
-                .attrs
-                .iter_mut()
-                .find(|attr| attr.path == path_from_ident_str("derive"));
-
-            match attrs {
-                None => {
-                    let mut attr = attr_from_ident_str("derive");
-
-                    let expr = Expr::Paren(ExprParen {
-                        attrs: vec![],
-                        paren_token: Default::default(),
-                        expr: Box::new(Expr::Path(ExprPath {
-                            attrs: vec![],
-                            qself: None,
-                            path: path_from_ident_str("Clone"),
-                        })),
-                    });
-
-                    attr.tokens = quote! { #expr };
-
-                    struct_item.attrs.push(attr);
-                }
-                Some(attrs) => {
-                    let mut parsed = syn::parse2::<Expr>(attrs.tokens.clone())
-                        .expect("Failed to parse derive attribute for actor");
-
-                    // When we have single derive macro the type is ExprParen which has to be reconstructed into ExprTuple.
-                    match &mut parsed {
-                        Expr::Paren(ExprParen { expr, .. }) => {
-                            if let Expr::Path(ExprPath { path, .. }) = expr.as_mut() {
-                                let contains = path
-                                    .segments
-                                    .iter()
-                                    .find(|seg| seg.ident.to_string().as_str() == "Clone")
-                                    .map(|_| true)
-                                    .unwrap_or(false);
-
-                                if !contains {
-                                    let mut tuple = ExprTuple {
-                                        attrs: vec![],
-                                        paren_token: Default::default(),
-                                        elems: Default::default(),
-                                    };
-
-                                    tuple.elems.push(Expr::Path(ExprPath {
-                                        attrs: vec![],
-                                        qself: None,
-                                        path: path.clone(),
-                                    }));
-                                    tuple.elems.push(Expr::Path(ExprPath {
-                                        attrs: vec![],
-                                        qself: None,
-                                        path: path_from_ident_str("Clone"),
-                                    }));
-
-                                    parsed = Expr::Tuple(tuple);
-                                }
-                            }
-                        }
-                        Expr::Tuple(ExprTuple { elems, .. }) => {
-                            let contains = elems
-                                .iter()
-                                .find_map(|expr| {
-                                    if let Expr::Path(ExprPath { path, .. }) = expr {
-                                        let seg = path.segments.first()?;
-
-                                        if seg.ident.to_string().as_str() == "Clone" {
-                                            return Some(true);
-                                        }
-                                    }
-                                    None
-                                })
-                                .unwrap_or(false);
-                            if !contains {
-                                elems.push(Expr::Path(ExprPath {
-                                    attrs: vec![],
-                                    qself: None,
-                                    path: path_from_ident_str("Clone"),
-                                }))
-                            };
-                        }
-                        _ => unimplemented!(),
-                    }
-
-                    attrs.tokens = quote! { #parsed };
-                }
-            }
+            // let attrs = struct_item
+            //     .attrs
+            //     .iter_mut()
+            //     .find(|attr| attr.path == path_from_ident_str("derive"));
+            //
+            // match attrs {
+            //     None => {
+            //         let mut attr = attr_from_ident_str("derive");
+            //
+            //         let expr = Expr::Paren(ExprParen {
+            //             attrs: vec![],
+            //             paren_token: Default::default(),
+            //             expr: Box::new(Expr::Path(ExprPath {
+            //                 attrs: vec![],
+            //                 qself: None,
+            //                 path: path_from_ident_str("Clone"),
+            //             })),
+            //         });
+            //
+            //         attr.tokens = quote! { #expr };
+            //
+            //         struct_item.attrs.push(attr);
+            //     }
+            //     Some(attrs) => {
+            //         let mut parsed = syn::parse2::<Expr>(attrs.tokens.clone())
+            //             .expect("Failed to parse derive attribute for actor");
+            //
+            //         // When we have single derive macro the type is ExprParen which has to be reconstructed into ExprTuple.
+            //         match &mut parsed {
+            //             Expr::Paren(ExprParen { expr, .. }) => {
+            //                 if let Expr::Path(ExprPath { path, .. }) = expr.as_mut() {
+            //                     let contains = path
+            //                         .segments
+            //                         .iter()
+            //                         .find(|seg| seg.ident.to_string().as_str() == "Clone")
+            //                         .map(|_| true)
+            //                         .unwrap_or(false);
+            //
+            //                     if !contains {
+            //                         let mut tuple = ExprTuple {
+            //                             attrs: vec![],
+            //                             paren_token: Default::default(),
+            //                             elems: Default::default(),
+            //                         };
+            //
+            //                         tuple.elems.push(Expr::Path(ExprPath {
+            //                             attrs: vec![],
+            //                             qself: None,
+            //                             path: path.clone(),
+            //                         }));
+            //                         tuple.elems.push(Expr::Path(ExprPath {
+            //                             attrs: vec![],
+            //                             qself: None,
+            //                             path: path_from_ident_str("Clone"),
+            //                         }));
+            //
+            //                         parsed = Expr::Tuple(tuple);
+            //                     }
+            //                 }
+            //             }
+            //             Expr::Tuple(ExprTuple { elems, .. }) => {
+            //                 let contains = elems
+            //                     .iter()
+            //                     .find_map(|expr| {
+            //                         if let Expr::Path(ExprPath { path, .. }) = expr {
+            //                             let seg = path.segments.first()?;
+            //
+            //                             if seg.ident.to_string().as_str() == "Clone" {
+            //                                 return Some(true);
+            //                             }
+            //                         }
+            //                         None
+            //                     })
+            //                     .unwrap_or(false);
+            //                 if !contains {
+            //                     elems.push(Expr::Path(ExprPath {
+            //                         attrs: vec![],
+            //                         qself: None,
+            //                         path: path_from_ident_str("Clone"),
+            //                     }))
+            //                 };
+            //             }
+            //             _ => unimplemented!(),
+            //         }
+            //
+            //         attrs.tokens = quote! { #parsed };
+            //     }
+            // }
 
             // If #[actor(no_static)] is presented then we ignore the following and return Actor trait
             // impl with () as Actor::Message and Actor::Result type
@@ -928,43 +928,43 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                         .expect(&panic);
 
                     // we construct an optional statement is we are wrapping blocking
-                    let mut stmt0 = None;
-                    if is_blocking {
-                        // ToDo: in case async_trait changed.
-                        // *. Here we use a hack. #[async_trait] would transfer
-                        // all self identifier to _self by default so we take use of
-                        // it and map our cloned Self to _self identifier too.
-
-                        let st = Stmt::Local(Local {
-                            attrs: vec![],
-                            let_token: Default::default(),
-                            pat: Pat::Ident(PatIdent {
-                                attrs: vec![],
-                                by_ref: None,
-                                mutability: None,
-                                ident: Ident::new("_self", Span::call_site()),
-                                subpat: None,
-                            }),
-                            init: Some((
-                                Default::default(),
-                                Box::new(Expr::MethodCall(ExprMethodCall {
-                                    attrs: vec![],
-                                    receiver: Box::new(Expr::Path(ExprPath {
-                                        attrs: vec![],
-                                        qself: None,
-                                        path: path_from_ident_str("self"),
-                                    })),
-                                    dot_token: Default::default(),
-                                    method: Ident::new("clone", Span::call_site()),
-                                    turbofish: None,
-                                    paren_token: Default::default(),
-                                    args: Default::default(),
-                                })),
-                            )),
-                            semi_token: Default::default(),
-                        });
-                        stmt0 = Some(st);
-                    };
+                    let stmt0 = None;
+                    // if is_blocking {
+                    //     // ToDo: in case async_trait changed.
+                    //     // *. Here we use a hack. #[async_trait] would transfer
+                    //     // all self identifier to _self by default so we take use of
+                    //     // it and map our cloned Self to _self identifier too.
+                    //
+                    //     let st = Stmt::Local(Local {
+                    //         attrs: vec![],
+                    //         let_token: Default::default(),
+                    //         pat: Pat::Ident(PatIdent {
+                    //             attrs: vec![],
+                    //             by_ref: None,
+                    //             mutability: None,
+                    //             ident: Ident::new("_self", Span::call_site()),
+                    //             subpat: None,
+                    //         }),
+                    //         init: Some((
+                    //             Default::default(),
+                    //             Box::new(Expr::MethodCall(ExprMethodCall {
+                    //                 attrs: vec![],
+                    //                 receiver: Box::new(Expr::Path(ExprPath {
+                    //                     attrs: vec![],
+                    //                     qself: None,
+                    //                     path: path_from_ident_str("self"),
+                    //                 })),
+                    //                 dot_token: Default::default(),
+                    //                 method: Ident::new("clone", Span::call_site()),
+                    //                 turbofish: None,
+                    //                 paren_token: Default::default(),
+                    //                 args: Default::default(),
+                    //             })),
+                    //         )),
+                    //         semi_token: Default::default(),
+                    //     });
+                    //     stmt0 = Some(st);
+                    // };
 
                     // If the message have blocking attribute we wrap the method in runtime::spawn_blocking
                     let stmt1 = if is_blocking {

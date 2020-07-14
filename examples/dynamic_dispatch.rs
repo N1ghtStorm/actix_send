@@ -9,19 +9,13 @@ use actix_send::prelude::*;
 #[tokio::main]
 async fn main() {
     // create an actor instance. The create function would return our Actor struct.
-    let actor = MyActor::create(|| MyActor { state: 0 });
+    let builder = MyActor::builder(|| async { MyActor { state: 0 } });
 
     // build and start the actor(s).
-    let address: Address<MyActor> = actor.build().start();
+    let address: Address<MyActor> = builder.start().await;
 
     // let the actor run a boxed future.
-    let _ = address
-        .run(|actor| {
-            Box::pin(async move {
-                actor.state += 1;
-            })
-        })
-        .await;
+    let _ = address.run(|actor| Box::pin(actor.handle_message())).await;
 
     let mut var = String::from("outer variable");
 
@@ -55,4 +49,10 @@ async fn main() {
 #[actor(no_static)]
 pub struct MyActor {
     pub state: usize,
+}
+
+impl MyActor {
+    async fn handle_message(&mut self) {
+        self.state += 1;
+    }
 }

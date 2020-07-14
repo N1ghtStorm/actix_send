@@ -1,7 +1,8 @@
 use std::time::Duration;
 
-use actix_send::prelude::*;
 use futures_util::stream::StreamExt;
+
+use actix_send::prelude::*;
 
 use crate::my_actor::*;
 
@@ -13,14 +14,15 @@ use crate::my_actor::*;
 
 #[async_std::main]
 async fn main() {
-    let state1 = String::from("running");
-    let state2 = String::from("running");
-
     // create an actor instance. The create function would return our Actor struct.
-    let actor = MyActor::create(|| MyActor { state1, state2 });
+    let builder = MyActor::builder(|| async {
+        let state1 = String::from("running");
+        let state2 = String::from("running");
+        MyActor { state1, state2 }
+    });
 
     // build and start the actor(s).
-    let address: Address<MyActor> = actor.build().start();
+    let address: Address<MyActor> = builder.start().await;
 
     // construct new messages.
     let msg = Message1 {

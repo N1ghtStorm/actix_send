@@ -31,10 +31,10 @@ impl MyActor {
 #[tokio::main]
 async fn main() {
     // define actor creation
-    let my_actor = MyActor::create(|| MyActor);
+    let builder = MyActor::builder(|| async { MyActor });
 
     // build and start actor.
-    let my_actor: Address<MyActor> = my_actor.build().start();
+    let address: Address<MyActor> = builder.start().await;
 
     /*
        send messages to actor.
@@ -42,15 +42,15 @@ async fn main() {
        No matter how we name the handle message method for a give <MessageType> in impl MyActor
        we can just call Address::send(<MessageType>).
     */
-    let res1 = my_actor.send(Message1).await;
+    let res1 = address.send(Message1).await;
 
     assert_eq!((), res1.unwrap());
 
-    let res2 = my_actor.send(Message2).await;
+    let res2 = address.send(Message2).await;
 
     assert_eq!(8, res2.unwrap());
 
-    let res3 = my_actor.send(Message3).await;
+    let res3 = address.send(Message3).await;
     assert_eq!(16, res3.unwrap());
 
     println!("example finished successfully");

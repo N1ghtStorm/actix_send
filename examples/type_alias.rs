@@ -50,11 +50,11 @@ pub mod actor2 {
 
 #[tokio::main]
 async fn main() {
-    let actor1 = Actor1::create(|| Actor1);
-    let address1 = actor1.build().start();
+    let builder = Actor1::builder(|| async { Actor1 });
+    let address1 = builder.start().await;
 
-    let actor2 = Actor2::create(|| Actor2);
-    let address2 = actor2.build().start();
+    let builder = Actor2::builder(|| async { Actor2 });
+    let address2 = builder.start().await;
 
     let res = address1.send(Message).await.unwrap();
     assert_eq!(res, 1u8);

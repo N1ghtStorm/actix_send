@@ -91,11 +91,12 @@ impl Handler for MyActor {
 
 #[tokio::main]
 async fn main() {
-    let state = String::from("running");
+    let builder = MyActor::builder(|| async {
+        let state = String::from("running");
+        MyActor { state }
+    });
 
-    let actor = MyActor::create(|| MyActor { state });
-
-    let address = actor.build().start();
+    let address = builder.start().await;
 
     let res = address.send(Message1(8)).await.unwrap();
     assert_eq!(res, 8u32);

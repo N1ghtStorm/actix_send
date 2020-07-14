@@ -15,16 +15,17 @@ use {
 fn main() {
     #[cfg(feature = "actix-runtime")]
     actix_rt::System::new("actix-test").block_on(async {
-        let state = String::from("running");
-
-        let actor = MyActor::create(|| MyActor { state });
+        let builder = MyActor::builder(|| async {
+            let state = String::from("running");
+            MyActor { state }
+        });
 
         /*
            When build multiple actors they would all spawn on current thread where start method called.
            So we would have 4 actors share the same address working on the main thread.
            They would not block one another when processing messages.
         */
-        let address = actor.build().num(4).start();
+        let address = builder.num(4).start().await;
 
         let res = address.send(Message1).await.unwrap();
 
@@ -60,8 +61,10 @@ fn main() {
 
         drop(address);
 
-        let state = String::from("running2");
-        let actor = MyActor::create(|| MyActor { state });
+        let builder = MyActor::builder(|| async {
+            let state = String::from("running2");
+            MyActor { state }
+        });
 
         /*
             We can utilize arbiters and spawn our actors on a thread other than the current one.
@@ -76,7 +79,7 @@ fn main() {
             a more precise control.
         */
 
-        let address = actor.build().num(12).start_with_arbiter(&arbiters[2..5]);
+        let address = builder.num(12).start_with_arbiter(&arbiters[2..5]).await;
 
         let _ = actix_rt::time::delay_for(Duration::from_secs(1)).await;
 

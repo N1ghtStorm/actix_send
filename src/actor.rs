@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc, Mutex,
@@ -15,19 +16,16 @@ where
     type Message: Send;
     type Result: Send;
 
-    fn build(self) -> Builder<Self> {
+    /// define a new builder for an new set of actor(s) with the async closure.
+    fn builder<F, Fut>(f: F) -> Builder<Self, Fut>
+    where
+        F: Fn() -> Fut + Send + 'static,
+        Fut: Future<Output = Self> + Send + 'static,
+    {
         Builder {
-            actor: self,
+            actor_builder: Box::new(f),
             config: Default::default(),
         }
-    }
-
-    /// Create an new actor with the closure.
-    fn create<F>(f: F) -> Self
-    where
-        F: FnOnce() -> Self,
-    {
-        f()
     }
 
     /// Called when actor starts.

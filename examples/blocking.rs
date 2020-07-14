@@ -1,7 +1,4 @@
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-};
+use std::sync::{atomic::AtomicUsize, Arc};
 
 use actix_send::prelude::*;
 use tokio::task::JoinError;
@@ -10,13 +7,16 @@ use crate::my_actor::*;
 
 #[tokio::main]
 async fn main() {
-    let actor = MyActor::create(|| MyActor {
-        state: 0,
-        state2: Arc::new(AtomicUsize::new(0)),
+    let state2 = Arc::new(AtomicUsize::new(0));
+
+    let builder = MyActor::builder(move || {
+        let state2 = state2.clone();
+
+        async { MyActor { state: 0, state2 } }
     });
 
     // We need to build 2 actors as one actor can handle only one message at a time.
-    let address = actor.build().num(2).start();
+    let address = builder.num(2).start().await;
 
     let addr = address.clone();
     let f1 = async move {
@@ -76,8 +76,6 @@ pub mod my_actor {
             })
             .await;
 
-            assert_eq!(self.state2.load(Ordering::SeqCst), 1);
-
             res
 
             /*  Or some async after */
@@ -95,14 +93,12 @@ pub mod my_actor {
             /*
               ***.  LIMITATION:
 
-                    self here a Clone of MyActor's state.
-                    You can not mutate the state here.
-                    (Unless MyActor is a shareable actor with thread safe smart pointers.)
-
+                   For now you can't access self state in this handle method.
+                   As the whole method would be wrapped in a spawn_blocking function and send to
+                   another thread.
             */
 
             // self.state += 1; // This line would cause failure for compile if you uncomment.
-            self.state2.fetch_add(1, Ordering::SeqCst); // state2 of MyActor would be 1 now.
 
             std::thread::sleep(Duration::from_millis(100));
 

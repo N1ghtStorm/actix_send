@@ -7,17 +7,17 @@ use crate::my_actor2::*;
 
 #[tokio::main]
 async fn main() {
-    let actor1 = MyActor::create(|| MyActor);
+    let builder1 = MyActor::builder(|| async { MyActor });
 
-    let actor2 = MyActor2::create(|| MyActor2);
+    let builder2 = MyActor2::builder(|| async { MyActor2 });
 
-    let address1 = actor1
-        .build()
+    let address1 = builder1
         // We can handle delayed message before shutdown
         .handle_delayed_on_shutdown()
-        .start();
+        .start()
+        .await;
 
-    let address2 = actor2.build().start();
+    let address2 = builder2.start().await;
 
     for _ in 0..6 {
         // send messages after 10 seconds to actors.

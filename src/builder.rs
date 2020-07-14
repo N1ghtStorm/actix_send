@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -9,11 +10,12 @@ use crate::context::{ActorContext, ContextMessage};
 use crate::error::ActixSendError;
 use crate::util::runtime;
 
-pub struct Builder<A>
+pub struct Builder<A, F>
 where
     A: Actor,
+    F: Future<Output = A>,
 {
-    pub(crate) actor: A,
+    pub(crate) actor_builder: Box<dyn Fn() -> F>,
     pub config: Config,
 }
 
@@ -36,9 +38,10 @@ impl Default for Config {
     }
 }
 
-impl<A> Builder<A>
+impl<A, F> Builder<A, F>
 where
-    A: Actor + Handler + Clone,
+    A: Actor + Handler + 'static,
+    F: Future<Output = A>,
 {
     /// Build multiple actors with the num passed.
     ///
@@ -78,7 +81,7 @@ where
     }
 
     /// Start actor(s) with the Builder settings.
-    pub fn start(self) -> Address<A> {
+    pub async fn start(self) -> Address<A> {
         let num = self.config.num;
 
         let (tx, rx) = unbounded::<ContextMessage<A>>();
@@ -88,18 +91,10 @@ where
 
         let state = ActorState::new(self.config);
 
-        if num > 1 {
-            for _i in 0..num {
-                ActorContext::new(
-                    tx.downgrade(),
-                    rx.clone(),
-                    self.actor.clone(),
-                    state.clone(),
-                )
-                .spawn_loop();
-            }
-        } else {
-            ActorContext::new(tx.downgrade(), rx, self.actor, state.clone()).spawn_loop();
+        for _i in 0..num {
+            let actor = (self.actor_builder)().await;
+
+            ActorContext::new(tx.downgrade(), rx.clone(), actor, state.clone()).spawn_loop();
         }
 
         Address::new(tx, state)
@@ -109,7 +104,7 @@ where
     ///
     /// Actors would try to spawn evenly on the given arbiters.
     #[cfg(feature = "actix-runtime")]
-    pub fn start_with_arbiter(self, arbiters: &[actix_rt::Arbiter]) -> Address<A> {
+    pub async fn start_with_arbiter(self, arbiters: &[actix_rt::Arbiter]) -> Address<A> {
         let num = self.config.num;
 
         let (tx, rx) = unbounded::<ContextMessage<A>>();
@@ -119,30 +114,18 @@ where
 
         let state = ActorState::new(self.config);
 
-        if num > 1 {
-            let len = arbiters.len();
+        let len = arbiters.len();
 
-            for i in 0..num {
-                let index = i % len;
+        for i in 0..num {
+            let index = i % len;
 
-                let ctx = ActorContext::new(
-                    tx.downgrade(),
-                    rx.clone(),
-                    self.actor.clone(),
-                    state.clone(),
-                );
+            let actor = (self.actor_builder)().await;
 
-                arbiters
-                    .get(index)
-                    .expect("Vec<Arbiters> index overflow")
-                    .exec_fn(|| ctx.spawn_loop());
-            }
-        } else {
-            let ctx = ActorContext::new(tx.downgrade(), rx, self.actor, state.clone());
+            let ctx = ActorContext::new(tx.downgrade(), rx.clone(), actor, state.clone());
 
             arbiters
-                .first()
-                .expect("Vec<Arbiters> index overflow.")
+                .get(index)
+                .expect("Vec<Arbiters> index overflow")
                 .exec_fn(|| ctx.spawn_loop());
         }
 

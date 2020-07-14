@@ -73,7 +73,6 @@ pub mod shared_actor {
 pub mod non_shared_actor {
     use super::*;
 
-    // Actor must be a type that can impl with Copy and/or Clone
     #[actor]
     pub struct NonSharedActor {
         pub state: usize,
@@ -93,13 +92,19 @@ pub mod non_shared_actor {
 
 #[tokio::main]
 async fn main() {
-    // build and start shareable actors.
-    let actor = SharedActor::create(|| SharedActor {
-        state: Arc::new(AtomicUsize::new(0)),
-        info: Arc::new(Mutex::new(HashMap::new())),
+    // build shared smart pointers first.
+    let state = Arc::new(AtomicUsize::new(0));
+    let info = Arc::new(Mutex::new(HashMap::new()));
+
+    // move the clone of pointers to builder function.
+    let builder = SharedActor::builder(move || {
+        let state = state.clone();
+        let info = info.clone();
+        async { SharedActor { state, info } }
     });
 
-    let address = actor.build().num(12).start();
+    // set the actor instances we want with Builder::num and start them
+    let address = builder.num(12).start().await;
 
     // send messages
     let futures = (0..1_000)
@@ -118,9 +123,9 @@ async fn main() {
     }
 
     // build and start non share actors.
-    let actor2 = NonSharedActor::create(|| NonSharedActor { state: 0 });
+    let builder = NonSharedActor::builder(|| async { NonSharedActor { state: 0 } });
 
-    let address2 = actor2.build().num(12).start();
+    let address2 = builder.num(12).start().await;
 
     let futures = (0..1_000)
         // Both shared_actor and non_shared_actor have the same type Message1

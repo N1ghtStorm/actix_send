@@ -1,8 +1,10 @@
-use std::sync::Arc;
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::Instant;
 
+use actix::Arbiter;
 use tokio::fs::File;
-use tokio::sync::Mutex;
+use tokio::io::AsyncReadExt;
 
 use actix_send::prelude::*;
 
@@ -13,10 +15,14 @@ use crate::actix_send_actor::*;
 
     A naive benchmark between actix and actix_send.
     This example serve as a way to optimize actix_send crate.
-    It DOES NOT represent real world performance for either crate.
+
+    Build with:
+
+    cargo build --example benchmark --no-default-features --features actix-runtime --release
+
 
     Run with:
-    cargo build --example benchmark --release
+
     ./target/release/examples/benchmark --target <actix_send or actix> --rounds <usize>.
 
     optional argument: --heap-alloc
@@ -24,7 +30,8 @@ use crate::actix_send_actor::*;
 
 */
 
-fn main() {
+#[actix_rt::main]
+async fn main() {
     let num = num_cpus::get();
 
     let mut target = String::from("actix_send");
@@ -69,160 +76,122 @@ fn main() {
 
     match target.as_str() {
         "actix_send" => {
-            tokio::runtime::Builder::new()
-                .threaded_scheduler()
-                .core_threads(num)
-                .enable_all()
-                .build()
-                .unwrap()
-                .block_on(async move {
-                    let file = simple_txt(file_path).await;
+            let builder = ActixSendActor::builder(move || {
+                let file_path = file_path.clone();
+                async move {
+                    let file = File::open(file_path).await.unwrap();
+                    ActixSendActor { file, heap_alloc }
+                }
+            });
 
-                    let actor = ActixSendActor::create(|| ActixSendActor { file, heap_alloc });
+            let arbiters = (0..num).map(|_| Arbiter::new()).collect::<Vec<Arbiter>>();
 
-                    let address = actor.build().num(num).start();
+            let address = builder.num(num).start_with_arbiter(&arbiters).await;
 
-                    if dynamic {
-                        println!("starting benchmark actix_send with dynamic dispatch");
-                        let mut join = Vec::new();
-
-                        for _ in 0..num {
-                            for _ in 0..rounds {
-                                join.push(address.run(|actor| {
-                                    Box::pin(async move {
-                                        use tokio::io::AsyncReadExt;
-                                        let heap = actor.heap_alloc;
-                                        let f = actor.file.clone();
-
-                                        if heap {
-                                            let mut buffer = Vec::with_capacity(100_0000);
-                                            let _ = f.lock().await.read(&mut buffer).await.unwrap();
-                                        } else {
-                                            let mut buffer = [0u8; 1_000];
-                                            let _ = f.lock().await.read(&mut buffer).await.unwrap();
-                                        }
-
-                                        1
-                                    })
-                                }));
-                            }
-                        }
-
-                        let start = Instant::now();
-                        futures_util::future::join_all(join).await;
-                        println!(
-                            "total runtime is {:#?}",
-                            Instant::now().duration_since(start)
-                        );
-                    } else {
-                        println!("starting benchmark actix_send");
-
-                        let mut join = Vec::new();
-
-                        for _ in 0..num {
-                            for _ in 0..rounds {
-                                join.push(address.send(PingSend));
-                            }
-                        }
-
-                        let start = Instant::now();
-                        futures_util::future::join_all(join).await;
-                        println!(
-                            "total runtime is {:#?}",
-                            Instant::now().duration_since(start)
-                        );
-                    }
-                });
-        }
-        "actix" => {
-            println!("starting benchmark actix");
-
-            actix_rt::System::new("actix").block_on(async move {
-                let file = simple_txt(file_path).await;
-
+            if dynamic {
+                println!("starting benchmark actix_send with dynamic dispatch");
                 let mut join = Vec::new();
 
                 for _ in 0..num {
-                    let file = file.clone();
-                    let heap_alloc = heap_alloc;
-                    let arb = actix::Arbiter::new();
-                    use actix::Actor;
-                    let addr = ActixActor::start_in_arbiter(&arb, move |_| ActixActor {
-                        file,
-                        heap_alloc,
-                    });
-
                     for _ in 0..rounds {
-                        join.push(addr.send(Ping));
+                        join.push(address.run(|actor| Box::pin(actor.read_file())));
                     }
                 }
 
                 let start = Instant::now();
-                let _ = futures_util::future::join_all(join).await;
+                futures_util::future::join_all(join).await;
                 println!(
                     "total runtime is {:#?}",
                     Instant::now().duration_since(start)
                 );
-            });
+            } else {
+                println!("starting benchmark actix_send");
+
+                let mut join = Vec::new();
+
+                for _ in 0..num {
+                    for _ in 0..rounds {
+                        join.push(address.send(Ping));
+                    }
+                }
+
+                let start = Instant::now();
+                futures_util::future::join_all(join).await;
+                println!(
+                    "total runtime is {:#?}",
+                    Instant::now().duration_since(start)
+                );
+            };
+        }
+        "actix" => {
+            let mut join = Vec::new();
+
+            for _ in 0..num {
+                let file = File::open(file_path.clone()).await.unwrap();
+                let heap_alloc = heap_alloc;
+                let arb = actix::Arbiter::new();
+                use actix::Actor;
+                let addr = ActixActor::start_in_arbiter(&arb, move |_| ActixActor {
+                    file: Rc::new(RefCell::new(file)),
+                    heap_alloc,
+                });
+
+                for _ in 0..rounds {
+                    join.push(addr.send(Ping));
+                }
+            }
+
+            let start = Instant::now();
+            let _ = futures_util::future::join_all(join).await;
+            println!(
+                "total runtime is {:#?}",
+                Instant::now().duration_since(start)
+            );
         }
         _ => panic!("--target must be either actix or actix_send"),
     }
 }
 
-async fn simple_txt(file_path: String) -> Arc<Mutex<File>> {
-    let file = File::open(file_path).await.unwrap();
-    Arc::new(Mutex::new(file))
-}
+pub struct Ping;
 
-#[actor_mod]
 pub mod actix_send_actor {
-    use std::sync::Arc;
-
-    use tokio::fs::File;
-    use tokio::io::AsyncReadExt;
-    use tokio::sync::Mutex;
-
-    use actix_send::prelude::*;
+    use super::*;
 
     #[actor]
     pub struct ActixSendActor {
-        pub file: Arc<Mutex<File>>,
+        pub file: File,
         pub heap_alloc: bool,
     }
 
-    #[message(result = "u8")]
-    pub struct PingSend;
-
-    #[handler]
-    impl Handler for ActixSendActor {
-        async fn handle(&mut self, _: PingSend) -> u8 {
-            // We can access Self directly but to be fair in comparison we clone and copy them.
-            let heap = self.heap_alloc;
-            let f = self.file.clone();
-
-            if heap {
+    impl ActixSendActor {
+        pub async fn read_file(&mut self) -> u8 {
+            if self.heap_alloc {
                 let mut buffer = Vec::with_capacity(100_0000);
-                let _ = f.lock().await.read(&mut buffer).await.unwrap();
+                let _ = self.file.read(&mut buffer).await.unwrap();
             } else {
                 let mut buffer = [0u8; 1_000];
-                let _ = f.lock().await.read(&mut buffer).await.unwrap();
+                let _ = self.file.read(&mut buffer).await.unwrap();
             }
 
             1
         }
     }
+
+    #[handler_v2]
+    impl ActixSendActor {
+        async fn handle(&mut self, _: Ping) -> u8 {
+            self.read_file().await
+        }
+    }
 }
 
 pub mod actix_actor {
-    use std::sync::Arc;
+    use actix::{Actor, AtomicResponse, Context, Handler, Message, WrapFuture};
 
-    use actix::{Actor, Context, Handler, Message, ResponseFuture};
-    use tokio::fs::File;
-    use tokio::io::AsyncReadExt;
-    use tokio::sync::Mutex;
+    use super::*;
 
     pub struct ActixActor {
-        pub file: Arc<Mutex<File>>,
+        pub file: Rc<RefCell<File>>,
         pub heap_alloc: bool,
     }
 
@@ -230,29 +199,34 @@ pub mod actix_actor {
         type Context = Context<Self>;
     }
 
-    pub struct Ping;
-
     impl Message for Ping {
         type Result = u8;
     }
 
     impl Handler<Ping> for ActixActor {
-        type Result = ResponseFuture<u8>;
+        type Result = AtomicResponse<Self, u8>;
 
         fn handle(&mut self, _: Ping, _ctx: &mut Context<Self>) -> Self::Result {
             let f = self.file.clone();
             let heap = self.heap_alloc;
 
-            Box::pin(async move {
-                if heap {
-                    let mut buffer = Vec::with_capacity(100_0000);
-                    let _ = f.lock().await.read(&mut buffer).await.unwrap();
-                } else {
-                    let mut buffer = [0u8; 1_000];
-                    let _ = f.lock().await.read(&mut buffer).await.unwrap();
+            let fut = Box::pin(
+                async move {
+                    let mut refmut = f.borrow_mut();
+
+                    if heap {
+                        let mut buffer = Vec::with_capacity(100_0000);
+                        let _ = refmut.read(&mut buffer).await.unwrap();
+                    } else {
+                        let mut buffer = [0u8; 1_000];
+                        let _ = refmut.read(&mut buffer).await.unwrap();
+                    }
+                    1
                 }
-                1
-            })
+                .into_actor(self),
+            );
+
+            AtomicResponse::new(fut)
         }
     }
 }

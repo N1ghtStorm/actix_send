@@ -8,8 +8,8 @@ use crate::my_actor::*;
 
 #[tokio::main]
 async fn main() {
-    let actor = MyActor::create(|| MyActor);
-    let address = actor.build().start();
+    let builder = MyActor::builder(|| async { MyActor });
+    let address = builder.start().await;
 
     // create a mock stream
     let stream = MockStream { offset: 0 };
