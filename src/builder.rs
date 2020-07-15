@@ -2,7 +2,7 @@ use std::future::Future;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use async_channel::{unbounded, SendError};
+use async_channel::{bounded, unbounded, SendError, Sender as AsyncChannelSender};
 
 use crate::actor::{Actor, ActorState, Handler};
 use crate::address::Address;
@@ -45,8 +45,6 @@ where
 {
     /// Build multiple actors with the num passed.
     ///
-    /// Every actor instance would be a `Clone` of the original one.
-    ///
     /// All the actors would steal work from a single `async-channel`.
     ///
     /// Default is 1
@@ -85,19 +83,23 @@ where
         let num = self.config.num;
 
         let (tx, rx) = unbounded::<ContextMessage<A>>();
-        let tx = Sender {
-            inner: Arc::new(tx),
-        };
+        let tx = Sender::from(tx);
 
         let state = ActorState::new(self.config);
+        let mut subs = Vec::with_capacity(num);
 
-        for _i in 0..num {
+        for i in 0..num {
             let actor = (self.actor_builder)().await;
 
-            ActorContext::new(tx.downgrade(), rx.clone(), actor, state.clone()).spawn_loop();
+            let (tx_sub, rx_sub) = bounded::<ContextMessage<A>>(num);
+
+            subs.push(tx_sub);
+
+            ActorContext::new(i, tx.downgrade(), rx.clone(), rx_sub, actor, state.clone())
+                .spawn_loop();
         }
 
-        Address::new(tx, state)
+        Address::new(tx, subs.into(), state)
     }
 
     /// Start actors on the given arbiter slice.
@@ -108,11 +110,10 @@ where
         let num = self.config.num;
 
         let (tx, rx) = unbounded::<ContextMessage<A>>();
-        let tx = Sender {
-            inner: Arc::new(tx),
-        };
+        let tx = Sender::from(tx);
 
         let state = ActorState::new(self.config);
+        let mut subs = Vec::with_capacity(num);
 
         let len = arbiters.len();
 
@@ -121,7 +122,12 @@ where
 
             let actor = (self.actor_builder)().await;
 
-            let ctx = ActorContext::new(tx.downgrade(), rx.clone(), actor, state.clone());
+            let (tx_sub, rx_sub) = bounded::<ContextMessage<A>>(num);
+
+            subs.push(tx_sub);
+
+            let ctx =
+                ActorContext::new(i, tx.downgrade(), rx.clone(), rx_sub, actor, state.clone());
 
             arbiters
                 .get(index)
@@ -129,7 +135,7 @@ where
                 .exec_fn(|| ctx.spawn_loop());
         }
 
-        Address::new(tx, state)
+        Address::new(tx, subs.into(), state)
     }
 
     fn check_num(num: usize, target: usize) {
@@ -147,7 +153,18 @@ pub struct Sender<A>
 where
     A: Actor,
 {
-    inner: Arc<async_channel::Sender<ContextMessage<A>>>,
+    inner: Arc<AsyncChannelSender<ContextMessage<A>>>,
+}
+
+impl<A> From<AsyncChannelSender<ContextMessage<A>>> for Sender<A>
+where
+    A: Actor,
+{
+    fn from(sender: AsyncChannelSender<ContextMessage<A>>) -> Self {
+        Self {
+            inner: Arc::new(sender),
+        }
+    }
 }
 
 impl<A> Clone for Sender<A>
@@ -213,5 +230,76 @@ where
 {
     pub(crate) fn upgrade(&self) -> Option<Sender<A>> {
         Weak::upgrade(&self.inner).map(|inner| Sender { inner })
+    }
+}
+
+pub struct GroupSender<A>
+where
+    A: Actor,
+{
+    inner: Arc<Vec<AsyncChannelSender<ContextMessage<A>>>>,
+}
+
+impl<A> From<Vec<AsyncChannelSender<ContextMessage<A>>>> for GroupSender<A>
+where
+    A: Actor,
+{
+    fn from(sender: Vec<AsyncChannelSender<ContextMessage<A>>>) -> Self {
+        Self {
+            inner: Arc::new(sender),
+        }
+    }
+}
+
+impl<A> Clone for GroupSender<A>
+where
+    A: Actor,
+{
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl<A> GroupSender<A>
+where
+    A: Actor,
+{
+    pub(crate) fn downgrade(&self) -> WeakGroupSender<A> {
+        WeakGroupSender {
+            inner: Arc::downgrade(&self.inner),
+        }
+    }
+
+    pub(crate) fn as_slice(&self) -> &[AsyncChannelSender<ContextMessage<A>>] {
+        self.inner.as_slice()
+    }
+}
+
+pub struct WeakGroupSender<A>
+where
+    A: Actor,
+{
+    inner: Weak<Vec<AsyncChannelSender<ContextMessage<A>>>>,
+}
+
+impl<A> Clone for WeakGroupSender<A>
+where
+    A: Actor,
+{
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl<A> WeakGroupSender<A>
+where
+    A: Actor,
+{
+    pub(crate) fn upgrade(&self) -> Option<GroupSender<A>> {
+        Weak::upgrade(&self.inner).map(|inner| GroupSender { inner })
     }
 }

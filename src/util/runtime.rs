@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use crate::error::ActixSendError;
 
-macro_rules! spawn {
+macro_rules! runtime_impl {
     (
         $spawn_fn: path,
         $delay_fn: path,
@@ -45,7 +45,7 @@ macro_rules! spawn {
 
 #[cfg(feature = "tokio-runtime")]
 #[cfg(not(any(feature = "async-std-runtime", feature = "actix-runtime")))]
-spawn!(
+runtime_impl!(
     tokio::spawn,
     tokio::time::delay_for,
     tokio::time::interval,
@@ -57,7 +57,7 @@ spawn!(
 
 #[cfg(feature = "async-std-runtime")]
 #[cfg(not(any(feature = "tokio-runtime", feature = "actix-runtime")))]
-spawn!(
+runtime_impl!(
     async_std::task::spawn,
     async_std::task::sleep,
     async_std::stream::interval,
@@ -69,7 +69,7 @@ spawn!(
 
 #[cfg(feature = "actix-runtime")]
 #[cfg(not(any(feature = "tokio-runtime", feature = "async-std-runtime")))]
-spawn!(
+runtime_impl!(
     actix_rt::spawn,
     actix_rt::time::delay_for,
     actix_rt::time::interval,

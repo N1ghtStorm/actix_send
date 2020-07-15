@@ -1,3 +1,4 @@
+use core::fmt::{Debug, Formatter, Result as FmtResult};
 use std::time::Duration;
 
 use async_channel::Receiver;
@@ -8,15 +9,19 @@ use crate::builder::WeakSender;
 use crate::object::{FutureObjectContainer, FutureResultObjectContainer};
 use crate::util::future_handle::{spawn_cancelable, FutureHandler};
 use crate::util::runtime;
+use futures_util::StreamExt;
 
-// ActorContext would hold actor instance local state.
+// ActorContext would hold actor instance local state and the actor itself.
 // State shared by actors are stored in ActorState.
 pub(crate) struct ActorContext<A>
 where
     A: Actor + Handler + 'static,
 {
+    id: usize,
+    generation: usize,
     tx: WeakSender<A>,
     rx: Receiver<ContextMessage<A>>,
+    rx_sub: Receiver<ContextMessage<A>>,
     manual_shutdown: bool,
     actor: A,
     state: ActorState<A>,
@@ -27,14 +32,19 @@ where
     A: Actor + Handler,
 {
     pub(crate) fn new(
+        id: usize,
         tx: WeakSender<A>,
         rx: Receiver<ContextMessage<A>>,
+        rx_sub: Receiver<ContextMessage<A>>,
         actor: A,
         state: ActorState<A>,
     ) -> Self {
         Self {
+            id,
+            generation: 0,
             tx,
             rx,
+            rx_sub,
             manual_shutdown: false,
             actor,
             state,
@@ -66,10 +76,12 @@ where
             self.actor.on_start();
             self.state.inc_active();
 
-            while let Ok(msg) = self.rx.recv().await {
+            let mut select = futures_util::stream::select(self.rx.clone(), self.rx_sub.clone());
+
+            while let Some(msg) = select.next().await {
                 match msg {
                     ContextMessage::ManualShutDown(tx) => {
-                        if tx.send(()).is_ok() {
+                        if tx.send(self.state()).is_ok() {
                             self.manual_shutdown = true;
                             break;
                         }
@@ -136,19 +148,42 @@ where
 
             // dec_active will return false if the actors are already shutdown.
             if self.state.dec_active() && self.state.restart_on_err() && !self.manual_shutdown {
+                self.generation += 1;
                 return self.spawn_loop();
             };
 
             self.actor.on_stop();
         });
     }
+
+    fn state(&self) -> ActorContextState {
+        ActorContextState {
+            id: self.id,
+            generation: self.generation,
+        }
+    }
 }
 
+pub struct ActorContextState {
+    id: usize,
+    generation: usize,
+}
+
+impl Debug for ActorContextState {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        f.debug_struct("ActorContextState")
+            .field("id", &self.id)
+            .field("generation(Times restarted)", &self.generation)
+            .finish()
+    }
+}
+
+// The message type bridge the Address and Actor context.
 pub(crate) enum ContextMessage<A>
 where
     A: Actor,
 {
-    ManualShutDown(OneshotSender<()>),
+    ManualShutDown(OneshotSender<ActorContextState>),
     Instant(Option<OneshotSender<A::Result>>, A::Message),
     InstantDynamic(
         Option<OneshotSender<FutureResultObjectContainer>>,

@@ -51,8 +51,12 @@ where
     }
 
     pub(crate) async fn insert(&self, future: FutureObjectContainer<A>) -> usize {
-        let key = self.next_key.fetch_add(1, Ordering::SeqCst);
+        let key = self.next_key.fetch_add(1, Ordering::Relaxed);
+
+        assert!(key < std::usize::MAX, "Too many interval futures");
+
         self.futures.lock().await.insert(key, future);
+
         key
     }
 

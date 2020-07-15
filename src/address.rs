@@ -11,8 +11,8 @@ use futures_channel::oneshot::channel;
 use futures_util::stream::Stream;
 
 use crate::actor::{Actor, ActorState};
-use crate::builder::{Sender, WeakSender};
-use crate::context::ContextMessage;
+use crate::builder::{GroupSender, Sender, WeakGroupSender, WeakSender};
+use crate::context::{ActorContextState, ContextMessage};
 use crate::error::ActixSendError;
 use crate::object::FutureResultObjectContainer;
 use crate::stream::ActorStream;
@@ -25,6 +25,7 @@ where
 {
     strong_count: Arc<AtomicUsize>,
     tx: Sender<A>,
+    subs: GroupSender<A>,
     state: ActorState<A>,
 }
 
@@ -37,6 +38,7 @@ where
         Self {
             strong_count: self.strong_count.clone(),
             tx: self.tx.clone(),
+            subs: self.subs.clone(),
             state: self.state.clone(),
         }
     }
@@ -62,6 +64,7 @@ where
         WeakAddress {
             strong_count: self.strong_count.clone(),
             tx: self.tx.downgrade(),
+            subs: self.subs.downgrade(),
             state: self.state.clone(),
         }
     }
@@ -71,10 +74,11 @@ where
         self.state.current_active()
     }
 
-    pub(crate) fn new(tx: Sender<A>, state: ActorState<A>) -> Self {
+    pub(crate) fn new(tx: Sender<A>, subs: GroupSender<A>, state: ActorState<A>) -> Self {
         Self {
             strong_count: Arc::new(AtomicUsize::new(1)),
             tx,
+            subs,
             state,
         }
     }
@@ -146,8 +150,43 @@ where
         ActorStream::new(stream, self.tx.clone())
     }
 
-    /// Close one actor for this address.
-    pub async fn close_one(&self) -> Result<(), ActixSendError> {
+    /// Send a broadcast message to all actor instances that are alive for this address.
+    #[must_use = "futures do nothing unless you `.await` or poll them"]
+    pub async fn broadcast<M>(
+        &self,
+        msg: M,
+    ) -> Vec<Result<<M as MapResult<A::Result>>::Output, ActixSendError>>
+    where
+        M: Into<A::Message> + MapResult<A::Result> + Clone,
+    {
+        let subs = self.subs.as_slice();
+
+        let fut = subs
+            .iter()
+            .fold(Vec::with_capacity(subs.len()), |mut fut, sub| {
+                let (tx, rx) = channel::<A::Result>();
+
+                let msg = ContextMessage::Instant(Some(tx), msg.clone().into());
+
+                let f = async move {
+                    let f = sub.send(msg);
+                    runtime::timeout(self.state.timeout(), f).await??;
+                    let rx = rx.await?;
+                    M::map(rx)
+                };
+
+                fut.push(f);
+
+                fut
+            });
+
+        futures_util::future::join_all(fut).await
+    }
+
+    /// Close one actor context for this address.
+    ///
+    /// Would a return a struct contains the closed context's state.
+    pub async fn close_one(&self) -> Result<ActorContextState, ActixSendError> {
         let (tx, rx) = channel();
         let msg = ContextMessage::ManualShutDown(tx);
         self.send_timeout(msg).await?;
@@ -255,6 +294,7 @@ where
 {
     strong_count: Arc<AtomicUsize>,
     tx: WeakSender<A>,
+    subs: WeakGroupSender<A>,
     state: ActorState<A>,
 }
 
@@ -268,6 +308,10 @@ where
             Address {
                 strong_count: self.strong_count,
                 tx: sender,
+                subs: self
+                    .subs
+                    .upgrade()
+                    .expect("Failed to upgrade WeakGroupSender"),
                 state: self.state,
             }
         })

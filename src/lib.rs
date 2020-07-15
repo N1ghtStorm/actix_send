@@ -12,24 +12,39 @@
 //! #[actor]
 //! pub struct MyActor;
 //!
-//! // message type
-//! pub struct Message;
+//! // message types
+//! pub struct Message1;
+//! pub struct Message2(u128);
+//! pub struct Message3 {
+//!     from: String,
+//!     content: Option<Vec<i64>>
+//! }
 //!
 //! // handler implement
 //! #[handler_v2]
 //! impl MyActor {
 //!     // the name of handle method is not important.
-//!     // It's only used to make IDE happy when actually we transform it to Actor::handle
-//!     // method.
-//!     async fn ra_ri_ru_rei_ro(&mut self, _: Message) -> u8 {
+//!     // It's only used to make your IDE/editor happy when actually we transform them to
+//!     // Handler trait and Handler::handle method.
+//!     async fn ra_ri_ru_rei_ro(&mut self, _: Message1) -> u8 {
 //!         8
 //!     }
+//!
+//!     async fn handle(&mut self, _:Message2) -> u16 {
+//!         16
+//!     }
+//!
+//!     // This is anti-pattern and your IDE/editor would most likely complain.
+//!     // But it's Ok to shadow name method and our #[handler_v2] macro would take care of it.
+//!     async fn handle(&mut self, _:Message3) -> u8 {
+//!         88
+//!     }   
 //! }
 //!
 //! #[tokio::main]
 //! async fn main() {
 //!
-//!     // define a builder of our actor. The async closure would return our Actor instance.
+//!     // define a builder for our actor. The async closure would return our Actor instance.
 //!     let builder = MyActor::builder(|| async { MyActor });
 //!
 //!     // start actor(s).
@@ -41,9 +56,14 @@
 //!        No matter how we name the handle method for a give <MessageType> in impl MyActor
 //!        we can just call Address::send(<MessageType>).
 //!     */
-//!     let res: Result<u8, ActixSendError> = address.send(Message).await;
 //!
-//!     assert_eq!(8, res.unwrap());
+//!     let res1: Result<u8, ActixSendError> = address.send(Message1).await;
+//!     let res2: Result<u16, ActixSendError> = address.send(Message2(9527)).await;
+//!     let res3 = address.send(Message3 { from: String::from("wife"), content: None }).await;
+//!
+//!     assert_eq!(8, res1.unwrap());
+//!     assert_eq!(16, res2.unwrap());
+//!     assert_eq!(88, res3.unwrap());
 //! }
 //! ```
 //!

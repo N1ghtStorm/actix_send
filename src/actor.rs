@@ -43,8 +43,10 @@ where
     fn on_stop(&mut self) {}
 }
 
-// a marker bit to notify if the Address is dropping.
+// a marker bit for lower bit of usize. can be used to notify if address is dropping.
 const MARKER: usize = 1;
+// do not replace marker bit when we doing add or sub.
+const UNIT: usize = 1 << 1;
 
 // A state shared between a set of actors.
 pub(crate) struct ActorState<A>
@@ -105,18 +107,18 @@ where
     }
 
     pub(crate) fn inc_active(&self) -> bool {
-        self.modify_active(|active| ((active >> 1) + 1) << 1)
+        self.modify_active(|active| active + UNIT)
     }
 
     pub(crate) fn dec_active(&self) -> bool {
-        self.modify_active(|active| ((active >> 1) - 1) << 1)
+        self.modify_active(|active| active - UNIT)
     }
 
     fn modify_active<F>(&self, mut f: F) -> bool
     where
         F: FnMut(usize) -> usize,
     {
-        let mut active = self.active.load(Ordering::Acquire);
+        let mut active = self.active.load(Ordering::Relaxed);
         loop {
             if active & MARKER != 0 {
                 return false;
@@ -124,12 +126,15 @@ where
 
             let new = f(active);
 
-            if self.active.compare_and_swap(active, new, Ordering::Release) == active {
-                return true;
+            match self.active.compare_exchange_weak(
+                active,
+                new,
+                Ordering::SeqCst,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return true,
+                Err(a) => active = a,
             }
-
-            std::thread::yield_now();
-            active = self.active.load(Ordering::Acquire);
         }
     }
 
@@ -144,7 +149,7 @@ where
 
     pub(crate) fn shutdown(&self) {
         // We write marker to the last bit of active usize.
-        self.active.fetch_or(MARKER, Ordering::SeqCst);
+        self.active.fetch_or(MARKER, Ordering::Relaxed);
         // cancel all the actors future handlers for delayed and interval tasks.
         for handler in self.handlers.lock().unwrap().iter() {
             handler.cancel();
@@ -152,7 +157,7 @@ where
     }
 
     fn is_running(&self) -> bool {
-        self.active.load(Ordering::SeqCst) & MARKER == 0
+        self.active.load(Ordering::Relaxed) & MARKER == 0
     }
 }
 

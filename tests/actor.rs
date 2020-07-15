@@ -94,4 +94,10 @@ async fn active_count() {
     let _ = tokio::time::delay_for(Duration::from_secs(1)).await;
 
     assert_eq!(address.current_active(), 8);
+
+    let _ = address.close_one().await;
+    let _ = address.close_one().await;
+    let _ = address.close_one().await;
+
+    assert_eq!(address.current_active(), 5);
 }
