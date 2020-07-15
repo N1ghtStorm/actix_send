@@ -1,10 +1,9 @@
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
-};
-use std::task::{Context, Poll, Waker};
+use core::future::Future;
+use core::pin::Pin;
+use core::sync::atomic::{AtomicBool, Ordering};
+use core::task::{Context, Poll, Waker};
+
+use std::sync::{Arc, Mutex};
 
 use futures_util::future::Either;
 

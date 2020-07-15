@@ -1,7 +1,15 @@
 #[cfg(feature = "actix-runtime")]
 use {
-    crate::actix_actor::*, crate::actix_send_actor::*, actix::Arbiter, actix_send::prelude::*,
-    std::cell::RefCell, std::rc::Rc, std::time::Instant, tokio::fs::File, tokio::io::AsyncReadExt,
+    crate::actix_actor::*,
+    crate::actix_send_actor::*,
+    actix::Arbiter,
+    actix_send::prelude::*,
+    futures_util::{stream::FuturesUnordered, StreamExt},
+    std::cell::RefCell,
+    std::rc::Rc,
+    std::time::Instant,
+    tokio::fs::File,
+    tokio::io::AsyncReadExt,
 };
 
 /*
@@ -84,12 +92,14 @@ fn main() {
 
                 if dynamic {
                     println!("starting benchmark actix_send with dynamic dispatch");
-                    let join = (0..num * rounds)
-                        .map(|_| address.run(|actor| Box::pin(actor.read_file())))
-                        .collect::<Vec<_>>();
+
+                    let join = (0..num * rounds).fold(FuturesUnordered::new(), |f, _| {
+                        f.push(address.run(|actor| Box::pin(actor.read_file())));
+                        f
+                    });
 
                     let start = Instant::now();
-                    futures_util::future::join_all(join).await;
+                    let _ = join.collect::<Vec<_>>().await;
                     println!(
                         "total runtime is {:#?}",
                         Instant::now().duration_since(start)
@@ -97,12 +107,13 @@ fn main() {
                 } else {
                     println!("starting benchmark actix_send");
 
-                    let join = (0..num * rounds)
-                        .map(|_| address.send(Ping))
-                        .collect::<Vec<_>>();
+                    let join = (0..num * rounds).fold(FuturesUnordered::new(), |f, _| {
+                        f.push(address.send(Ping));
+                        f
+                    });
 
                     let start = Instant::now();
-                    futures_util::future::join_all(join).await;
+                    let _ = join.collect::<Vec<_>>().await;
                     println!(
                         "total runtime is {:#?}",
                         Instant::now().duration_since(start)
@@ -110,7 +121,9 @@ fn main() {
                 };
             }
             "actix" => {
-                let mut join = Vec::new();
+                println!("starting benchmark actix");
+
+                let join = FuturesUnordered::new();
 
                 for _ in 0..num {
                     let file = File::open(file_path.clone()).await.unwrap();
@@ -128,7 +141,7 @@ fn main() {
                 }
 
                 let start = Instant::now();
-                let _ = futures_util::future::join_all(join).await;
+                let _ = join.collect::<Vec<_>>().await;
                 println!(
                     "total runtime is {:#?}",
                     Instant::now().duration_since(start)

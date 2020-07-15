@@ -3,9 +3,9 @@
     We can register multiple async closure with different return types to one actor.
 */
 
-use std::future::Future;
-use std::marker::PhantomData;
-use std::pin::Pin;
+use core::future::Future;
+use core::marker::PhantomData;
+use core::pin::Pin;
 
 use crate::actor::Actor;
 

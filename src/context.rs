@@ -1,15 +1,15 @@
 use core::fmt::{Debug, Formatter, Result as FmtResult};
-use std::time::Duration;
+use core::time::Duration;
 
 use async_channel::Receiver;
 use futures_channel::oneshot::Sender as OneshotSender;
+use futures_util::StreamExt;
 
 use crate::actor::{Actor, ActorState, Handler};
 use crate::builder::WeakSender;
 use crate::object::{FutureObjectContainer, FutureResultObjectContainer};
 use crate::util::future_handle::{spawn_cancelable, FutureHandler};
 use crate::util::runtime;
-use futures_util::StreamExt;
 
 // ActorContext would hold actor instance local state and the actor itself.
 // State shared by actors are stored in ActorState.

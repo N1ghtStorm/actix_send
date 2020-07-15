@@ -1,4 +1,4 @@
-use std::fmt::{Debug, Formatter, Result as FmtResult};
+use core::fmt::{Debug, Formatter, Result as FmtResult};
 
 use async_channel::SendError;
 use futures_channel::oneshot::Canceled;

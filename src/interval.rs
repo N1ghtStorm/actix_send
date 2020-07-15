@@ -1,8 +1,7 @@
+use core::sync::atomic::{AtomicUsize, Ordering};
+
 use std::collections::HashMap;
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-};
+use std::sync::Arc;
 
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard};
 

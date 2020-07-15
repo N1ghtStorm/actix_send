@@ -1,9 +1,8 @@
-use std::future::Future;
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc, Mutex,
-};
-use std::time::Duration;
+use core::future::Future;
+use core::sync::atomic::{AtomicUsize, Ordering};
+use core::time::Duration;
+
+use std::sync::{Arc, Mutex};
 
 use crate::builder::{Builder, Config};
 use crate::interval::IntervalFutureSet;

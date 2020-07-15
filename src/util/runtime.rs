@@ -1,5 +1,5 @@
-use std::future::Future;
-use std::time::Duration;
+use core::future::Future;
+use core::time::Duration;
 
 use crate::error::ActixSendError;
 

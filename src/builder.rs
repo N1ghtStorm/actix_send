@@ -1,6 +1,7 @@
-use std::future::Future;
+use core::future::Future;
+use core::time::Duration;
+
 use std::sync::{Arc, Weak};
-use std::time::Duration;
 
 use async_channel::{bounded, unbounded, SendError, Sender as AsyncChannelSender};
 

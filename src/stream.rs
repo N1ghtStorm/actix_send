@@ -1,6 +1,6 @@
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 
 use futures_channel::oneshot::channel;
 use futures_util::stream::Stream;

@@ -1,14 +1,13 @@
-use std::future::Future;
-use std::marker::PhantomData;
-use std::pin::Pin;
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-};
-use std::time::Duration;
+use core::future::Future;
+use core::marker::PhantomData;
+use core::pin::Pin;
+use core::sync::atomic::{AtomicUsize, Ordering};
+use core::time::Duration;
+
+use std::sync::Arc;
 
 use futures_channel::oneshot::channel;
-use futures_util::stream::Stream;
+use futures_util::stream::{FuturesUnordered, Stream, StreamExt};
 
 use crate::actor::{Actor, ActorState};
 use crate::builder::{GroupSender, Sender, WeakGroupSender, WeakSender};
@@ -159,11 +158,10 @@ where
     where
         M: Into<A::Message> + MapResult<A::Result> + Clone,
     {
-        let subs = self.subs.as_slice();
-
-        let fut = subs
+        self.subs
+            .as_slice()
             .iter()
-            .fold(Vec::with_capacity(subs.len()), |mut fut, sub| {
+            .fold(FuturesUnordered::new(), |fut, sub| {
                 let (tx, rx) = channel::<A::Result>();
 
                 let msg = ContextMessage::Instant(Some(tx), msg.clone().into());
@@ -178,9 +176,9 @@ where
                 fut.push(f);
 
                 fut
-            });
-
-        futures_util::future::join_all(fut).await
+            })
+            .collect()
+            .await
     }
 
     /// Close one actor context for this address.
