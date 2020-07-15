@@ -104,9 +104,9 @@ pub mod my_actor {
     #[handler]
     impl Handler for MyActor {
         // The msg and handle's return type must match former message macro's result type.
-        async fn handle(&mut self, msg: Message1) -> u8 {
+        async fn handle(&mut self, msg123: Message1) -> u8 {
             println!("Actor State1 : {}", self.state1);
-            println!("We got an Message1.\r\nfrom : {}\r\n", msg.from);
+            println!("We got an Message1.\r\nfrom : {}\r\n", msg123.from);
             8
         }
     }

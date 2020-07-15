@@ -567,6 +567,7 @@ impl<'a> ActorInfo<'a> {
     // The return type of this handle method would be ActorMessageResult enum.
     pub(crate) fn handler_trait(&mut self, handle_info: &[HandleMethodInfo]) -> &mut Self {
         let actor_ident = self.ident;
+
         let message_enum_type = self.message_enum_type.clone();
         let message_enum_ident = self.message_enum_ident.clone();
         let result_enum_ident = &self.result_enum_ident;
@@ -625,7 +626,7 @@ impl<'a> ActorInfo<'a> {
                     attrs: vec![],
                     by_ref: None,
                     mutability: None,
-                    ident: Ident::new("msg", Span::call_site()),
+                    ident: handle.message_var_ident.clone(),
                     subpat: None,
                 }));
 
@@ -852,22 +853,11 @@ impl<'a> ActorInfo<'a> {
 
         self
     }
-
-    // We impl method alias for Address<Actor> which would wrap Address::send(<Message>)
-    // with the original handler method name.
-    // pub(crate) fn send_method_wrapper(&mut self, handle_info: &[HandleMethodInfo]) -> &mut Self {
-    //     let address_type_path = type_path_from_idents(vec![
-    //         Ident::new("actix_send", Span::call_site()),
-    //         Ident::new("prelude", Span::call_site()),
-    //         Ident::new("Address", Span::call_site()),
-    //     ]);
-    //
-    //     self
-    // }
 }
 
 // A struct contains all the handle methods info for one actor.
 pub(crate) struct HandleMethodInfo<'a> {
+    message_var_ident: Ident,
     message_type_path: &'a TypePath,
     message_return_type: Option<&'a Type>,
     // method_signature: &'a Signature,
@@ -877,14 +867,19 @@ pub(crate) struct HandleMethodInfo<'a> {
 
 impl<'a> HandleMethodInfo<'a> {
     pub(crate) fn new(method: &'a ImplItemMethod) -> Self {
-        let message_type_path = method
+        let (message_var_ident, message_type_path) = method
             .sig
             .inputs
             .iter()
             .find_map(|arg| {
-                if let FnArg::Typed(PatType { ty, .. }) = arg {
+                if let FnArg::Typed(PatType { ty, pat, .. }) = arg {
                     if let Type::Path(path) = ty.as_ref() {
-                        return Some(path);
+                        let arg_ident = match pat.as_ref() {
+                            Pat::Ident(ident) => ident.ident.clone(),
+                            _ => Ident::new("_msg", Span::call_site()),
+                        };
+
+                        return Some((arg_ident, path));
                     }
                 }
                 None
@@ -899,6 +894,7 @@ impl<'a> HandleMethodInfo<'a> {
         let is_async = method.sig.asyncness.is_some();
 
         Self {
+            message_var_ident,
             message_type_path,
             message_return_type,
             // method_signature: &method.sig,

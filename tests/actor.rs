@@ -24,8 +24,9 @@ pub mod my_actor {
 
     #[handler]
     impl Handler for TestActor {
-        async fn handle(&mut self, _: DummyMessage1) -> u8 {
+        async fn handle(&mut self, msg123: DummyMessage1) -> u8 {
             assert_eq!("running1", self.state1);
+            assert_eq!("a simple test", msg123.from.as_str());
             8
         }
     }

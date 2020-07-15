@@ -4,6 +4,8 @@ use core::time::Duration;
 
 use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
+
 use crate::builder::{Builder, Config};
 use crate::interval::IntervalFutureSet;
 use crate::util::future_handle::FutureHandler;
@@ -160,7 +162,7 @@ where
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 pub trait Handler
 where
     Self: Actor,

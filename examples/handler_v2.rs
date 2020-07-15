@@ -12,7 +12,7 @@ pub struct Message3;
 // handler implement
 #[handler_v2]
 impl MyActor {
-    async fn handle_msg1(&mut self, _: Message1) {}
+    async fn handle_msg1(&mut self, _msg1: Message1) {}
 
     // the name of handle method is not important at all.
     // It's only used to make IDE happy when actually we transfer them to Actor::handle

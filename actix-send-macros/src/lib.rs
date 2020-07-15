@@ -27,96 +27,6 @@ pub fn actor(meta: TokenStream, input: TokenStream) -> TokenStream {
 
     match item {
         Item::Struct(struct_item) => {
-            // add derive Clone if it's not presented.
-            // let attrs = struct_item
-            //     .attrs
-            //     .iter_mut()
-            //     .find(|attr| attr.path == path_from_ident_str("derive"));
-            //
-            // match attrs {
-            //     None => {
-            //         let mut attr = attr_from_ident_str("derive");
-            //
-            //         let expr = Expr::Paren(ExprParen {
-            //             attrs: vec![],
-            //             paren_token: Default::default(),
-            //             expr: Box::new(Expr::Path(ExprPath {
-            //                 attrs: vec![],
-            //                 qself: None,
-            //                 path: path_from_ident_str("Clone"),
-            //             })),
-            //         });
-            //
-            //         attr.tokens = quote! { #expr };
-            //
-            //         struct_item.attrs.push(attr);
-            //     }
-            //     Some(attrs) => {
-            //         let mut parsed = syn::parse2::<Expr>(attrs.tokens.clone())
-            //             .expect("Failed to parse derive attribute for actor");
-            //
-            //         // When we have single derive macro the type is ExprParen which has to be reconstructed into ExprTuple.
-            //         match &mut parsed {
-            //             Expr::Paren(ExprParen { expr, .. }) => {
-            //                 if let Expr::Path(ExprPath { path, .. }) = expr.as_mut() {
-            //                     let contains = path
-            //                         .segments
-            //                         .iter()
-            //                         .find(|seg| seg.ident.to_string().as_str() == "Clone")
-            //                         .map(|_| true)
-            //                         .unwrap_or(false);
-            //
-            //                     if !contains {
-            //                         let mut tuple = ExprTuple {
-            //                             attrs: vec![],
-            //                             paren_token: Default::default(),
-            //                             elems: Default::default(),
-            //                         };
-            //
-            //                         tuple.elems.push(Expr::Path(ExprPath {
-            //                             attrs: vec![],
-            //                             qself: None,
-            //                             path: path.clone(),
-            //                         }));
-            //                         tuple.elems.push(Expr::Path(ExprPath {
-            //                             attrs: vec![],
-            //                             qself: None,
-            //                             path: path_from_ident_str("Clone"),
-            //                         }));
-            //
-            //                         parsed = Expr::Tuple(tuple);
-            //                     }
-            //                 }
-            //             }
-            //             Expr::Tuple(ExprTuple { elems, .. }) => {
-            //                 let contains = elems
-            //                     .iter()
-            //                     .find_map(|expr| {
-            //                         if let Expr::Path(ExprPath { path, .. }) = expr {
-            //                             let seg = path.segments.first()?;
-            //
-            //                             if seg.ident.to_string().as_str() == "Clone" {
-            //                                 return Some(true);
-            //                             }
-            //                         }
-            //                         None
-            //                     })
-            //                     .unwrap_or(false);
-            //                 if !contains {
-            //                     elems.push(Expr::Path(ExprPath {
-            //                         attrs: vec![],
-            //                         qself: None,
-            //                         path: path_from_ident_str("Clone"),
-            //                     }))
-            //                 };
-            //             }
-            //             _ => unimplemented!(),
-            //         }
-            //
-            //         attrs.tokens = quote! { #parsed };
-            //     }
-            // }
-
             // If #[actor(no_static)] is presented then we ignore the following and return Actor trait
             // impl with () as Actor::Message and Actor::Result type
             let is_dynamic = args
@@ -153,13 +63,22 @@ pub fn actor(meta: TokenStream, input: TokenStream) -> TokenStream {
                     tokens: Default::default(),
                 };
 
-                let seg = PathSegment {
+                let seg1 = PathSegment {
+                    ident: Ident::new("actix_send", Span::call_site()),
+                    arguments: Default::default(),
+                };
+                let seg2 = PathSegment {
+                    ident: Ident::new("prelude", Span::call_site()),
+                    arguments: Default::default(),
+                };
+                let seg3 = PathSegment {
                     ident: Ident::new("async_trait", Span::call_site()),
                     arguments: Default::default(),
                 };
 
-                attr.path.segments.push(seg.clone());
-                attr.path.segments.push(seg);
+                attr.path.segments.push(seg1);
+                attr.path.segments.push(seg2);
+                attr.path.segments.push(seg3);
 
                 // impl Actor trait for struct;
                 let expended = quote! {
@@ -820,13 +739,19 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                     let mut args = method.sig.inputs.iter();
                     args.next();
 
-                    let ident = args
+                    let (arg_ident, ident) = args
                         .next()
                         .map(|arg| {
                             if let FnArg::Typed(pat) = arg {
                                 if let Type::Path(TypePath { path, .. }) = pat.ty.as_ref() {
                                     let seg = path.segments.first()?;
-                                    return Some(&seg.ident);
+
+                                    let arg_ident = match pat.pat.as_ref() {
+                                        Pat::Ident(ident) => ident.ident.clone(),
+                                        _ => Ident::new("_msg", Span::call_site()),
+                                    };
+
+                                    return Some((arg_ident, &seg.ident));
                                 }
                             }
                             None
@@ -834,9 +759,9 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                         .expect("handle method must have a legit TypePath for Message type")
                         .expect("handle method must have a argument as msg: MessageType");
 
-                    (ident.clone(), method.block.stmts.clone())
+                    (arg_ident, ident.clone(), method.block.stmts.clone())
                 })
-                .collect::<Vec<(Ident, Vec<Stmt>)>>();
+                .collect::<Vec<(Ident, Ident, Vec<Stmt>)>>();
 
             // ToDo: We are doing extra work removing all the #[handler] impls
             *items = items
@@ -903,11 +828,22 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                         elems: Default::default(),
                     };
 
+                    let ident = handle_methods
+                        .iter()
+                        .find_map(|(arg_ident, msg_ident, _)| {
+                            if msg_ident == &message_ident {
+                                Some(arg_ident.clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap();
+
                     pat.elems.push(Pat::Ident(PatIdent {
                         attrs: vec![],
                         by_ref: None,
                         mutability: None,
-                        ident: Ident::new("msg", Span::call_site()),
+                        ident,
                         subpat: None,
                     }));
 
@@ -918,7 +854,7 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
 
                     let stmts = handle_methods
                         .iter()
-                        .find_map(|(ident, stmts)| {
+                        .find_map(|(_, ident, stmts)| {
                             if ident == &message_ident {
                                 Some(stmts.clone())
                             } else {
