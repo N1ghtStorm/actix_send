@@ -53,7 +53,7 @@ path = "examples/type_alias.rs"
 
 [features]
 default = ["tokio-runtime"]
-tokio-runtime = ["tokio/rt-threaded", "tokio/stream", "tokio/sync", "tokio/time"]
+tokio-runtime = ["tokio/rt-threaded", "tokio/sync", "tokio/time"]
 async-std-runtime = ["async-std", "tokio/sync"]
 actix-runtime = ["actix-rt", "tokio/sync"]
 

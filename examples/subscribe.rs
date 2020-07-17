@@ -15,16 +15,24 @@ pub struct SlaveActor2;
 #[derive(Clone)]
 pub struct Message;
 
+#[derive(Clone)]
+pub struct Message2;
+
 // handler implement
 #[handler_v2]
 impl MasterActor {
     async fn handle_msg(&mut self, _msg1: Message) {}
+    async fn handle_msg2(&mut self, _msg1: Message2) {}
 }
 
 #[handler_v2]
 impl SlaveActor1 {
     async fn handle_msg(&mut self, _msg1: Message) {
-        println!("SlaveActor1: we received from our master actor");
+        println!("SlaveActor1: we received Message from our master actor");
+    }
+
+    async fn handle_msg2(&mut self, _msg1: Message2) {
+        println!("SlaveActor1: we received Message2 from our master actor");
     }
 }
 
@@ -32,7 +40,11 @@ impl SlaveActor1 {
 #[handler_v2]
 impl SlaveActor2 {
     async fn handle_msg(&mut self, _msg1: Message) {
-        println!("SlaveActor2: we received from our master actor");
+        println!("SlaveActor2: we received Message from our master actor");
+    }
+
+    async fn handle_msg2(&mut self, _msg1: Message2) {
+        println!("SlaveActor2: we received Message2 from our master actor");
     }
 }
 
@@ -58,6 +70,14 @@ async fn main() {
         .subscribe_with::<_, Message>(&address_slave2)
         .await;
 
+    // We can infer different type for a given address.
+    address_master
+        .subscribe_with::<_, Message2>(&address_slave1)
+        .await;
+    address_master
+        .subscribe_with::<_, Message2>(&address_slave2)
+        .await;
+
     // We send a message to the subscribers.
     let res = address_master.send_subscribe(Message).await;
 
@@ -68,4 +88,10 @@ async fn main() {
        *. Limitation: The Ok part of the result can't return for now.
     */
     res.into_iter().for_each(|r| r.unwrap());
+
+    address_master
+        .send_subscribe(Message2)
+        .await
+        .into_iter()
+        .for_each(|r| r.unwrap());
 }

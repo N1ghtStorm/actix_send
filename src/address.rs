@@ -213,7 +213,8 @@ where
     /// send message to all subscribers of this actor.
     ///
     /// *. It's important the message type can be handled correctly by the subscriber actors.
-    ///  A typecast error would return if the message type can not by certain subscriber actor.
+    ///  A typecast error would return if the message type can not be handled by certain subscriber
+    /// actor.
     pub async fn send_subscribe<M>(&self, msg: M) -> Vec<Result<(), ActixSendError>>
     where
         M: Clone + Send + 'static,
@@ -234,8 +235,11 @@ where
 
                 fut
             })
-            .collect()
+            .collect::<Vec<Option<Result<(), ActixSendError>>>>()
             .await
+            .into_iter()
+            .filter_map(|s| s)
+            .collect()
     }
 
     /// Close one actor context for this address.

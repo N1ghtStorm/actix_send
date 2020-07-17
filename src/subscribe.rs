@@ -101,7 +101,7 @@ pub(crate) trait SubscribeTrait {
         &self,
         msg: MessageContainer,
         timeout: Duration,
-    ) -> Pin<Box<dyn Future<Output = Result<(), ActixSendError>> + Send + '_>>;
+    ) -> Pin<Box<dyn Future<Output = Option<Result<(), ActixSendError>>> + Send + '_>>;
 }
 
 impl<A, M> SubscribeTrait for Subscriber<A, M>
@@ -113,24 +113,28 @@ where
         &self,
         mut msg: MessageContainer,
         timeout: Duration,
-    ) -> Pin<Box<dyn Future<Output = Result<(), ActixSendError>> + Send + '_>> {
+    ) -> Pin<Box<dyn Future<Output = Option<Result<(), ActixSendError>>> + Send + '_>> {
         Box::pin(async move {
             // We downcast message trait object to the Message type of WeakSender.
 
-            let msg = msg
-                .inner
-                .as_mut_any()
-                .downcast_mut::<Option<M>>()
-                .ok_or(ActixSendError::TypeCast)?
-                .take()
-                .ok_or(ActixSendError::TypeCast)?;
-
-            let sender = self.sender.upgrade().ok_or(ActixSendError::Closed)?;
-            let f = sender.send(ContextMessage::Instant(None, msg.into()));
-
-            runtime::timeout(timeout, f).await??;
-
-            Ok(())
+            let msg = msg.inner.as_mut_any().downcast_mut::<Option<M>>()?.take()?;
+            let res = self._send(msg, timeout).await;
+            Some(res)
         })
+    }
+}
+
+impl<A, M> Subscriber<A, M>
+where
+    A: Actor + 'static,
+    M: Send + Into<A::Message> + 'static,
+{
+    async fn _send(&self, msg: M, timeout: Duration) -> Result<(), ActixSendError> {
+        let sender = self.sender.upgrade().ok_or(ActixSendError::Closed)?;
+        let f = sender.send(ContextMessage::Instant(None, msg.into()));
+
+        runtime::timeout(timeout, f).await??;
+
+        Ok(())
     }
 }
