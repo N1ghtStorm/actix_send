@@ -4,6 +4,7 @@ use std::sync::{
 };
 
 use actix_send::prelude::*;
+use futures_util::FutureExt;
 
 #[actor]
 pub struct MyActor {
@@ -50,7 +51,7 @@ async fn main() {
 
     assert_eq!(28, res);
 
-    let state = address.run(|actor| Box::pin(actor.state())).await.unwrap();
+    let state = address.run(|actor| actor.state().boxed()).await.unwrap();
 
     assert_eq!(8, state);
 }

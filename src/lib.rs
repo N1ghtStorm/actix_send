@@ -137,7 +137,9 @@ pub(crate) mod context;
 pub(crate) mod error;
 pub(crate) mod interval;
 pub(crate) mod object;
+pub(crate) mod sender;
 pub(crate) mod stream;
+pub(crate) mod subscribe;
 pub(crate) mod util;
 
 pub mod prelude {

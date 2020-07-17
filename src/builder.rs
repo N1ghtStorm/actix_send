@@ -1,15 +1,12 @@
 use core::future::Future;
 use core::time::Duration;
 
-use std::sync::{Arc, Weak};
-
-use async_channel::{bounded, unbounded, SendError, Sender as AsyncChannelSender};
+use async_channel::{bounded, unbounded};
 
 use crate::actor::{Actor, ActorState, Handler};
 use crate::address::Address;
 use crate::context::{ActorContext, ContextMessage};
-use crate::error::ActixSendError;
-use crate::util::runtime;
+use crate::sender::Sender;
 
 pub struct Builder<A, F>
 where
@@ -25,6 +22,7 @@ pub struct Config {
     pub num: usize,
     pub restart_on_err: bool,
     pub handle_delayed_on_shutdown: bool,
+    pub allow_subscribe: bool,
     pub timeout: Duration,
 }
 
@@ -34,6 +32,7 @@ impl Default for Config {
             num: 1,
             restart_on_err: false,
             handle_delayed_on_shutdown: false,
+            allow_subscribe: false,
             timeout: Duration::from_secs(10),
         }
     }
@@ -76,6 +75,14 @@ where
     /// Default is 10 seconds
     pub fn timeout(mut self, duration: Duration) -> Self {
         self.config.timeout = duration;
+        self
+    }
+
+    /// Allow other actors subscribe to our actors.
+    ///
+    /// Default is false
+    pub fn allow_subscribe(mut self) -> Self {
+        self.config.allow_subscribe = true;
         self
     }
 
@@ -145,162 +152,5 @@ where
             "The number of actors must be larger than {}",
             target
         );
-    }
-}
-
-// A wrapper for async_channel::sender.
-// ToDo: remove this when we have a weak sender.
-pub struct Sender<A>
-where
-    A: Actor,
-{
-    inner: Arc<AsyncChannelSender<ContextMessage<A>>>,
-}
-
-impl<A> From<AsyncChannelSender<ContextMessage<A>>> for Sender<A>
-where
-    A: Actor,
-{
-    fn from(sender: AsyncChannelSender<ContextMessage<A>>) -> Self {
-        Self {
-            inner: Arc::new(sender),
-        }
-    }
-}
-
-impl<A> Clone for Sender<A>
-where
-    A: Actor,
-{
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-        }
-    }
-}
-
-impl<A> Sender<A>
-where
-    A: Actor,
-{
-    pub(crate) fn downgrade(&self) -> WeakSender<A> {
-        WeakSender {
-            inner: Arc::downgrade(&self.inner),
-        }
-    }
-
-    pub(crate) async fn send(
-        &self,
-        msg: ContextMessage<A>,
-    ) -> Result<(), SendError<ContextMessage<A>>> {
-        self.inner.send(msg).await
-    }
-
-    pub(crate) async fn send_timeout(
-        &self,
-        msg: ContextMessage<A>,
-        dur: Duration,
-    ) -> Result<(), ActixSendError> {
-        let fut = self.inner.send(msg);
-        runtime::timeout(dur, fut).await??;
-        Ok(())
-    }
-}
-
-pub struct WeakSender<A>
-where
-    A: Actor,
-{
-    inner: Weak<async_channel::Sender<ContextMessage<A>>>,
-}
-
-impl<A> Clone for WeakSender<A>
-where
-    A: Actor,
-{
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-        }
-    }
-}
-
-impl<A> WeakSender<A>
-where
-    A: Actor,
-{
-    pub(crate) fn upgrade(&self) -> Option<Sender<A>> {
-        Weak::upgrade(&self.inner).map(|inner| Sender { inner })
-    }
-}
-
-pub struct GroupSender<A>
-where
-    A: Actor,
-{
-    inner: Arc<Vec<AsyncChannelSender<ContextMessage<A>>>>,
-}
-
-impl<A> From<Vec<AsyncChannelSender<ContextMessage<A>>>> for GroupSender<A>
-where
-    A: Actor,
-{
-    fn from(sender: Vec<AsyncChannelSender<ContextMessage<A>>>) -> Self {
-        Self {
-            inner: Arc::new(sender),
-        }
-    }
-}
-
-impl<A> Clone for GroupSender<A>
-where
-    A: Actor,
-{
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-        }
-    }
-}
-
-impl<A> GroupSender<A>
-where
-    A: Actor,
-{
-    pub(crate) fn downgrade(&self) -> WeakGroupSender<A> {
-        WeakGroupSender {
-            inner: Arc::downgrade(&self.inner),
-        }
-    }
-
-    pub(crate) fn as_slice(&self) -> &[AsyncChannelSender<ContextMessage<A>>] {
-        self.inner.as_slice()
-    }
-}
-
-pub struct WeakGroupSender<A>
-where
-    A: Actor,
-{
-    inner: Weak<Vec<AsyncChannelSender<ContextMessage<A>>>>,
-}
-
-impl<A> Clone for WeakGroupSender<A>
-where
-    A: Actor,
-{
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-        }
-    }
-}
-
-impl<A> WeakGroupSender<A>
-where
-    A: Actor,
-{
-    pub(crate) fn upgrade(&self) -> Option<GroupSender<A>> {
-        Weak::upgrade(&self.inner).map(|inner| GroupSender { inner })
     }
 }

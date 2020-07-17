@@ -2,15 +2,15 @@ use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 
-use futures_channel::oneshot::channel;
 use futures_util::stream::Stream;
 use pin_project::pin_project;
+use tokio::sync::oneshot::channel;
 
 use crate::actor::Actor;
 use crate::address::MapResult;
-use crate::builder::Sender;
 use crate::context::ContextMessage;
 use crate::error::ActixSendError;
+use crate::sender::Sender;
 
 #[pin_project]
 pub struct ActorStream<A, S, I>
@@ -21,7 +21,7 @@ where
 {
     #[pin]
     stream: S,
-    tx: Sender<A>,
+    tx: Sender<ContextMessage<A>>,
     #[allow(clippy::type_complexity)]
     pending_future: Option<
         Pin<Box<dyn Future<Output = Result<<I as MapResult<A::Result>>::Output, ActixSendError>>>>,
@@ -34,7 +34,7 @@ where
     S: Stream<Item = I>,
     I: Into<A::Message> + MapResult<A::Result>,
 {
-    pub(crate) fn new(stream: S, tx: Sender<A>) -> Self {
+    pub(crate) fn new(stream: S, tx: Sender<ContextMessage<A>>) -> Self {
         Self {
             stream,
             tx,
@@ -86,7 +86,7 @@ where
 }
 
 async fn send<A, I>(
-    sender: Sender<A>,
+    sender: Sender<ContextMessage<A>>,
     item: I,
 ) -> Result<<I as MapResult<A::Result>>::Output, ActixSendError>
 where

@@ -27,8 +27,7 @@ pub fn actor(meta: TokenStream, input: TokenStream) -> TokenStream {
 
     match item {
         Item::Struct(struct_item) => {
-            // If #[actor(no_static)] is presented then we ignore the following and return Actor trait
-            // impl with () as Actor::Message and Actor::Result type
+            // check if #[actor(no_static)] attr is presented
             let is_dynamic = args
                 .iter()
                 .filter_map(|nest| {
@@ -41,50 +40,28 @@ pub fn actor(meta: TokenStream, input: TokenStream) -> TokenStream {
                 .map(|segments| {
                     segments
                         .iter()
-                        .find(|seg| seg.ident.to_string().as_str() == "no_static")
-                        .is_some()
+                        .any(|seg| seg.ident.to_string().as_str() == "no_static")
                 })
                 .find(|bool| *bool)
                 .unwrap_or(false);
 
-            if is_dynamic {
-                let ident = struct_item.ident.clone();
+            let actor_info = ActorInfo::new(&struct_item.ident);
 
-                let (impl_gen, impl_ty, impl_where) = struct_item.generics.split_for_impl();
+            let actor_ident = actor_info.ident;
+            let message_enum_ident = actor_info.message_enum_ident;
+            let result_enum_ident = actor_info.result_enum_ident;
 
-                let mut attr = Attribute {
-                    pound_token: Default::default(),
-                    style: AttrStyle::Outer,
-                    bracket_token: Default::default(),
-                    path: Path {
-                        leading_colon: None,
-                        segments: Default::default(),
-                    },
-                    tokens: Default::default(),
-                };
+            let (impl_gen, impl_ty, impl_where) = struct_item.generics.split_for_impl();
 
-                let seg1 = PathSegment {
-                    ident: Ident::new("actix_send", Span::call_site()),
-                    arguments: Default::default(),
-                };
-                let seg2 = PathSegment {
-                    ident: Ident::new("prelude", Span::call_site()),
-                    arguments: Default::default(),
-                };
-                let seg3 = PathSegment {
-                    ident: Ident::new("async_trait", Span::call_site()),
-                    arguments: Default::default(),
-                };
+            let expand = if is_dynamic {
+                let attr = attr_from_ident_str(vec!["actix_send", "prelude", "async_trait"]);
 
-                attr.path.segments.push(seg1);
-                attr.path.segments.push(seg2);
-                attr.path.segments.push(seg3);
-
-                // impl Actor trait for struct;
-                let expended = quote! {
+                // impl dummy Message/Result type and dummy handler trait if we are a dynamic only
+                // actor
+                quote! {
                     #struct_item
 
-                    impl #impl_gen Actor for #ident #impl_ty
+                    impl #impl_gen Actor for #actor_ident #impl_ty
                     #impl_where
                     {
                         type Message = ();
@@ -92,47 +69,28 @@ pub fn actor(meta: TokenStream, input: TokenStream) -> TokenStream {
                     }
 
                     #attr
-                    impl Handler for #ident
+                    impl Handler for #actor_ident
                     {
                         async fn handle(&mut self, msg: ()) {
 
                         }
                     }
-                };
-
-                return expended.into();
-            }
-
-            let ident = struct_item.ident.clone();
-
-            let message_ident_string = format!("{}Message", ident.to_string());
-            let message_ident = Ident::new(message_ident_string.as_str(), Span::call_site());
-
-            let result_ident_string = format!("{}Result", ident.to_string());
-            let result_ident = Ident::new(result_ident_string.as_str(), Span::call_site());
-
-            let (impl_gen, impl_ty, impl_where) = struct_item.generics.split_for_impl();
-
-            // impl Actor trait for struct;
-            let expended = quote! {
+                }
+            } else {
+                quote! {
                     #struct_item
 
-                    impl #impl_gen #ident #impl_ty
+                    impl #impl_gen Actor for #actor_ident #impl_ty
                     #impl_where
                     {
+                        type Message = #message_enum_ident;
+                        type Result = #result_enum_ident;
                     }
-
-                    impl #impl_gen Actor for #ident #impl_ty
-                    #impl_where
-                    {
-                        type Message = #message_ident;
-                        type Result = #result_ident;
-                    }
+                }
             };
 
-            expended.into()
+            expand.into()
         }
-
         _ => {
             unreachable!("Actor must be a struct");
         }
@@ -178,7 +136,7 @@ pub fn handler(_meta: TokenStream, input: TokenStream) -> TokenStream {
     match item {
         Item::Impl(mut impl_item) => {
             // add async_trait attribute if not presented.
-            let async_trait_attr = attr_from_ident_str("async_trait");
+            let async_trait_attr = attr_from_ident_str(vec!["async_trait"]);
 
             if !impl_item.attrs.contains(&async_trait_attr) {
                 impl_item.attrs.push(async_trait_attr);
@@ -498,7 +456,7 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                 expr_call.args.push(Expr::Path(ExprPath {
                     attrs: vec![],
                     qself: None,
-                    path: path_from_ident_str("result"),
+                    path: path_from_ident_str(vec!["result"]),
                 }));
 
                 let mut arms = Vec::new();
@@ -591,7 +549,7 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                     body: Box::new(Expr::Macro(ExprMacro {
                         attrs: vec![],
                         mac: Macro {
-                            path: path_from_ident_str("unreachable"),
+                            path: path_from_ident_str(vec!["unreachable"]),
                             bang_token: Default::default(),
                             delimiter: MacroDelimiter::Paren(Paren {
                                 span: Span::call_site(),
@@ -665,7 +623,7 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                             expr: Box::new(Expr::Path(ExprPath {
                                 attrs: vec![],
                                 qself: None,
-                                path: path_from_ident_str("msg"),
+                                path: path_from_ident_str(vec!["msg"]),
                             })),
                             brace_token: Default::default(),
                             arms,
@@ -909,7 +867,7 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                             func: Box::new(Expr::Path(ExprPath {
                                 attrs: vec![],
                                 qself: None,
-                                path: path_from_ident_str("actix_send_blocking"),
+                                path: path_from_ident_str(vec!["actix_send_blocking"]),
                             })),
                             paren_token: Default::default(),
                             args: Default::default(),
@@ -1007,7 +965,7 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                         base: Box::new(Expr::Path(ExprPath {
                             attrs: vec![],
                             qself: None,
-                            path: path_from_ident_str("result"),
+                            path: path_from_ident_str(vec!["result"]),
                         })),
                         dot_token: Default::default(),
                         await_token: Default::default(),
@@ -1041,12 +999,16 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                 .collect();
 
             let handle = Item::Impl(ItemImpl {
-                attrs: vec![attr_from_ident_str("handler")],
+                attrs: vec![attr_from_ident_str(vec!["handler"])],
                 defaultness: None,
                 unsafety: None,
                 impl_token: Default::default(),
                 generics: Default::default(),
-                trait_: Some((None, path_from_ident_str("Handler"), Default::default())),
+                trait_: Some((
+                    None,
+                    path_from_ident_str(vec!["Handler"]),
+                    Default::default(),
+                )),
                 self_ty: Box::new(Type::Path(type_path_from_idents(vec![actor_ident]))),
                 brace_token: Default::default(),
                 items: vec![ImplItem::Method(ImplItemMethod {
@@ -1077,7 +1039,7 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                             expr: Box::new(Expr::Path(ExprPath {
                                 attrs: vec![],
                                 qself: None,
-                                path: path_from_ident_str("msg"),
+                                path: path_from_ident_str(vec!["msg"]),
                             })),
                             brace_token: Default::default(),
                             arms,
@@ -1146,48 +1108,6 @@ pub fn handler_v2(_meta: TokenStream, input: TokenStream) -> TokenStream {
     }
 }
 
-// helper function for generating attribute.
-fn attr_from_ident_str(ident_str: &str) -> Attribute {
-    Attribute {
-        pound_token: Default::default(),
-        style: AttrStyle::Outer,
-        bracket_token: Default::default(),
-        path: path_from_ident_str(ident_str),
-        tokens: Default::default(),
-    }
-}
-
-// helper function for generating path.
-fn path_from_ident_str(ident_str: &str) -> Path {
-    let mut path = Path {
-        leading_colon: None,
-        segments: Default::default(),
-    };
-
-    path.segments.push(PathSegment {
-        ident: Ident::new(ident_str, Span::call_site()),
-        arguments: Default::default(),
-    });
-
-    path
-}
-
-fn type_path_from_idents(idents: Vec<Ident>) -> TypePath {
-    let mut path = Path {
-        leading_colon: None,
-        segments: Default::default(),
-    };
-
-    for ident in idents.into_iter() {
-        path.segments.push(PathSegment {
-            ident,
-            arguments: Default::default(),
-        })
-    }
-
-    TypePath { qself: None, path }
-}
-
 fn from_trait(
     source_type_path: TypePath,
     source_ident: Ident,
@@ -1243,7 +1163,7 @@ fn from_trait(
     expr_call.args.push(Expr::Path(ExprPath {
         attrs: vec![],
         qself: None,
-        path: path_from_ident_str("msg"),
+        path: path_from_ident_str(vec!["msg"]),
     }));
 
     let mut method = ImplItemMethod {
@@ -1347,4 +1267,48 @@ fn static_message(item: Item, result: Type) -> TokenStream {
         }
         _ => unreachable!("Message must be a struct"),
     }
+}
+
+// helper function for generating attribute.
+fn attr_from_ident_str(ident_str: Vec<&str>) -> Attribute {
+    Attribute {
+        pound_token: Default::default(),
+        style: AttrStyle::Outer,
+        bracket_token: Default::default(),
+        path: path_from_ident_str(ident_str),
+        tokens: Default::default(),
+    }
+}
+
+// helper function for generating path.
+fn path_from_ident_str(ident_str: Vec<&str>) -> Path {
+    let mut path = Path {
+        leading_colon: None,
+        segments: Default::default(),
+    };
+
+    for ident_str in ident_str.into_iter() {
+        path.segments.push(PathSegment {
+            ident: Ident::new(ident_str, Span::call_site()),
+            arguments: Default::default(),
+        });
+    }
+
+    path
+}
+
+fn type_path_from_idents(idents: Vec<Ident>) -> TypePath {
+    let mut path = Path {
+        leading_colon: None,
+        segments: Default::default(),
+    };
+
+    for ident in idents.into_iter() {
+        path.segments.push(PathSegment {
+            ident,
+            arguments: Default::default(),
+        })
+    }
+
+    TypePath { qself: None, path }
 }

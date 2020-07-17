@@ -12,10 +12,10 @@ use crate::{attr_from_ident_str, path_from_ident_str, type_path_from_idents};
 
 // A struct contains Actor specific info.
 pub(crate) struct ActorInfo<'a> {
-    ident: &'a Ident,
-    message_enum_ident: Ident,
-    message_enum_type: Type,
-    result_enum_ident: Ident,
+    pub(crate) ident: &'a Ident,
+    pub(crate) message_enum_ident: Ident,
+    pub(crate) message_enum_type: Type,
+    pub(crate) result_enum_ident: Ident,
     pub(crate) message_enum: ItemEnum,
     pub(crate) result_enum: ItemEnum,
     pub(crate) items: Vec<Item>,
@@ -222,7 +222,7 @@ impl<'a> ActorInfo<'a> {
             expr_call.args.push(Expr::Path(ExprPath {
                 attrs: vec![],
                 qself: None,
-                path: path_from_ident_str("msg"),
+                path: path_from_ident_str(vec!["msg"]),
             }));
 
             let mut method = ImplItemMethod {
@@ -345,7 +345,7 @@ impl<'a> ActorInfo<'a> {
             expr_call.args.push(Expr::Path(ExprPath {
                 attrs: vec![],
                 qself: None,
-                path: path_from_ident_str("result"),
+                path: path_from_ident_str(vec!["result"]),
             }));
 
             let mut arms = Vec::new();
@@ -438,7 +438,7 @@ impl<'a> ActorInfo<'a> {
                 body: Box::new(Expr::Macro(ExprMacro {
                     attrs: vec![],
                     mac: Macro {
-                        path: path_from_ident_str("unreachable"),
+                        path: path_from_ident_str(vec!["unreachable"]),
                         bang_token: Default::default(),
                         delimiter: MacroDelimiter::Paren(Paren {
                             span: Span::call_site(),
@@ -512,7 +512,7 @@ impl<'a> ActorInfo<'a> {
                         expr: Box::new(Expr::Path(ExprPath {
                             attrs: vec![],
                             qself: None,
-                            path: path_from_ident_str("msg"),
+                            path: path_from_ident_str(vec!["msg"]),
                         })),
                         brace_token: Default::default(),
                         arms,
@@ -605,7 +605,7 @@ impl<'a> ActorInfo<'a> {
         // We just throw the statements of handle method for every type of message into the final handle method's enum variants.
 
         let arms = handle_info
-            .into_iter()
+            .iter()
             .map(|handle| {
                 let message_ident = handle.message_type_path.path.get_ident().unwrap();
 
@@ -698,7 +698,7 @@ impl<'a> ActorInfo<'a> {
                         func: Box::new(Expr::Path(ExprPath {
                             attrs: vec![],
                             qself: None,
-                            path: path_from_ident_str("actix_send_blocking"),
+                            path: path_from_ident_str(vec!["actix_send_blocking"]),
                         })),
                         paren_token: Default::default(),
                         args: Default::default(),
@@ -768,7 +768,7 @@ impl<'a> ActorInfo<'a> {
                     base: Box::new(Expr::Path(ExprPath {
                         attrs: vec![],
                         qself: None,
-                        path: path_from_ident_str("result"),
+                        path: path_from_ident_str(vec!["result"]),
                     })),
                     dot_token: Default::default(),
                     await_token: Default::default(),
@@ -802,12 +802,16 @@ impl<'a> ActorInfo<'a> {
             .collect();
 
         let handle = Item::Impl(ItemImpl {
-            attrs: vec![attr_from_ident_str("handler")],
+            attrs: vec![attr_from_ident_str(vec!["handler"])],
             defaultness: None,
             unsafety: None,
             impl_token: Default::default(),
             generics: Default::default(),
-            trait_: Some((None, path_from_ident_str("Handler"), Default::default())),
+            trait_: Some((
+                None,
+                path_from_ident_str(vec!["Handler"]),
+                Default::default(),
+            )),
             self_ty: Box::new(Type::Path(type_path_from_idents(vec![actor_ident.clone()]))),
             brace_token: Default::default(),
             items: vec![ImplItem::Method(ImplItemMethod {
@@ -840,7 +844,7 @@ impl<'a> ActorInfo<'a> {
                         expr: Box::new(Expr::Path(ExprPath {
                             attrs: vec![],
                             qself: None,
-                            path: path_from_ident_str("msg"),
+                            path: path_from_ident_str(vec!["msg"]),
                         })),
                         brace_token: Default::default(),
                         arms,

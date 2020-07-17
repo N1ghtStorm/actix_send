@@ -1,4 +1,5 @@
 use actix_send::prelude::*;
+use futures_util::FutureExt;
 
 /*
     We can construct an actor that only does dynamic dispatch with no concrete message types.
@@ -15,7 +16,7 @@ async fn main() {
     let address: Address<MyActor> = builder.start().await;
 
     // let the actor run a boxed future.
-    let _ = address.run(|actor| Box::pin(actor.handle_message())).await;
+    let _ = address.run(|actor| actor.handle_message().boxed()).await;
 
     let mut var = String::from("outer variable");
 

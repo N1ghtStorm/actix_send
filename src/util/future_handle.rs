@@ -1,15 +1,14 @@
 use core::future::Future;
 use core::pin::Pin;
-use core::sync::atomic::{AtomicBool, Ordering};
 use core::task::{Context, Poll, Waker};
-
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use futures_util::future::Either;
 
 use crate::actor::Actor;
-use crate::builder::WeakSender;
 use crate::context::ContextMessage;
+use crate::sender::WeakSender;
+use crate::util::lock::SimpleSpinLock;
 use crate::util::runtime;
 
 macro_rules! spawn_cancel {
@@ -25,17 +24,14 @@ macro_rules! spawn_cancel {
                 + 'static,
             Fut: Future<Output = ()> $( + $send)*,
         {
-            let waker = Arc::new(Mutex::new(None));
-            let state = Arc::new(AtomicBool::new(true));
+            let waker = Arc::new(SimpleSpinLock::new(None));
 
             let finisher = FinisherFuture {
-                state: state.clone(),
                 waker: waker.clone(),
             };
 
             let future = futures_util::future::select(finisher, f);
             let handler = FutureHandler {
-                state,
                 waker,
                 tx: None,
             };
@@ -58,8 +54,7 @@ spawn_cancel!();
 
 // a future notified and polled by future_handler.
 pub(crate) struct FinisherFuture {
-    state: Arc<AtomicBool>,
-    waker: Arc<Mutex<Option<Waker>>>,
+    waker: Arc<SimpleSpinLock<Option<Waker>>>,
 }
 
 impl Future for FinisherFuture {
@@ -68,14 +63,13 @@ impl Future for FinisherFuture {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
 
-        if !this.state.load(Ordering::Acquire) {
-            return Poll::Ready(());
+        match this.waker.lock() {
+            None => Poll::Ready(()),
+            Some(mut guard) => {
+                *guard = Some(cx.waker().clone());
+                Poll::Pending
+            }
         }
-
-        let mut waker = this.waker.lock().unwrap();
-        *waker = Some(cx.waker().clone());
-
-        Poll::Pending
     }
 }
 
@@ -83,9 +77,8 @@ pub struct FutureHandler<A>
 where
     A: Actor,
 {
-    state: Arc<AtomicBool>,
-    waker: Arc<Mutex<Option<Waker>>>,
-    tx: Option<(usize, WeakSender<A>)>,
+    waker: Arc<SimpleSpinLock<Option<Waker>>>,
+    tx: Option<(usize, WeakSender<ContextMessage<A>>)>,
 }
 
 impl<A> Clone for FutureHandler<A>
@@ -94,7 +87,6 @@ where
 {
     fn clone(&self) -> Self {
         Self {
-            state: self.state.clone(),
             waker: self.waker.clone(),
             tx: self.tx.as_ref().map(|(idx, sender)| (*idx, sender.clone())),
         }
@@ -107,10 +99,17 @@ where
 {
     /// Cancel the future.
     pub fn cancel(&self) {
-        self.state.store(false, Ordering::Release);
-        if let Some(waker) = self.waker.lock().unwrap().take() {
-            waker.wake();
+        if let Some(mut guard) = self.waker.lock() {
+            let opt = guard.take();
+
+            drop(guard);
+            self.waker.close();
+
+            if let Some(waker) = opt {
+                waker.wake();
+            }
         }
+
         // We remove the interval future with index as key.
         if let Some((index, tx)) = self.tx.as_ref() {
             if let Some(tx) = tx.upgrade() {
@@ -122,7 +121,7 @@ where
         }
     }
 
-    pub(crate) fn attach_tx(&mut self, index: usize, tx: WeakSender<A>) {
+    pub(crate) fn attach_tx(&mut self, index: usize, tx: WeakSender<ContextMessage<A>>) {
         self.tx = Some((index, tx));
     }
 }

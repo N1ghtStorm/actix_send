@@ -2,12 +2,12 @@ use core::fmt::{Debug, Formatter, Result as FmtResult};
 use core::time::Duration;
 
 use async_channel::Receiver;
-use futures_channel::oneshot::Sender as OneshotSender;
 use futures_util::StreamExt;
+use tokio::sync::oneshot::Sender as OneshotSender;
 
 use crate::actor::{Actor, ActorState, Handler};
-use crate::builder::WeakSender;
 use crate::object::{FutureObjectContainer, FutureResultObjectContainer};
+use crate::sender::WeakSender;
 use crate::util::future_handle::{spawn_cancelable, FutureHandler};
 use crate::util::runtime;
 
@@ -19,7 +19,7 @@ where
 {
     id: usize,
     generation: usize,
-    tx: WeakSender<A>,
+    tx: WeakSender<ContextMessage<A>>,
     rx: Receiver<ContextMessage<A>>,
     rx_sub: Receiver<ContextMessage<A>>,
     manual_shutdown: bool,
@@ -33,7 +33,7 @@ where
 {
     pub(crate) fn new(
         id: usize,
-        tx: WeakSender<A>,
+        tx: WeakSender<ContextMessage<A>>,
         rx: Receiver<ContextMessage<A>>,
         rx_sub: Receiver<ContextMessage<A>>,
         actor: A,

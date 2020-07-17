@@ -4,7 +4,7 @@ use {
     crate::actix_send_actor::*,
     actix::Arbiter,
     actix_send::prelude::*,
-    futures_util::{stream::FuturesUnordered, StreamExt},
+    futures_util::{stream::FuturesUnordered, FutureExt, StreamExt},
     std::cell::RefCell,
     std::rc::Rc,
     std::time::Instant,
@@ -16,6 +16,8 @@ use {
 
     A naive benchmark between actix and actix_send.
     This example serve as a way to optimize actix_send crate.
+
+    It DOES NOT represent the real world performance of either crate.
 
     Build with:
 
@@ -41,40 +43,7 @@ fn main() {
         let mut heap_alloc = false;
         let mut dynamic = false;
 
-        let mut iter = std::env::args().into_iter();
-
-        let file_path = std::env::current_dir()
-            .ok()
-            .and_then(|path| {
-                let path = path.to_str()?.to_owned();
-                Some(path + "/sample/sample.txt")
-            })
-            .unwrap_or_else(|| String::from("./sample/sample.txt"));
-
-        loop {
-            if let Some(arg) = iter.next() {
-                if arg.as_str() == "--target" {
-                    if let Some(arg) = iter.next() {
-                        target = arg;
-                    }
-                }
-                if arg.as_str() == "--rounds" {
-                    if let Some(arg) = iter.next() {
-                        if let Ok(r) = arg.parse::<usize>() {
-                            rounds = r;
-                        }
-                    }
-                }
-                if arg.as_str() == "--heap-alloc" {
-                    heap_alloc = true;
-                }
-                if arg.as_str() == "--dynamic" {
-                    dynamic = true;
-                }
-                continue;
-            }
-            break;
-        }
+        let file_path = collect_arg(&mut target, &mut rounds, &mut heap_alloc, &mut dynamic);
 
         match target.as_str() {
             "actix_send" => {
@@ -94,7 +63,7 @@ fn main() {
                     println!("starting benchmark actix_send with dynamic dispatch");
 
                     let join = (0..num * rounds).fold(FuturesUnordered::new(), |f, _| {
-                        f.push(address.run(|actor| Box::pin(actor.read_file())));
+                        f.push(address.run(|actor| actor.read_file().boxed()));
                         f
                     });
 
@@ -167,15 +136,7 @@ pub mod actix_send_actor {
 
     impl ActixSendActor {
         pub async fn read_file(&mut self) -> u8 {
-            if self.heap_alloc {
-                let mut buffer = Vec::with_capacity(100_0000);
-                let _ = self.file.read(&mut buffer).await.unwrap();
-            } else {
-                let mut buffer = [0u8; 1_000];
-                let _ = self.file.read(&mut buffer).await.unwrap();
-            }
-
-            1
+            read_file(&mut self.file, self.heap_alloc).await
         }
     }
 
@@ -217,14 +178,7 @@ pub mod actix_actor {
                 async move {
                     let mut refmut = f.borrow_mut();
 
-                    if heap {
-                        let mut buffer = Vec::with_capacity(100_0000);
-                        let _ = refmut.read(&mut buffer).await.unwrap();
-                    } else {
-                        let mut buffer = [0u8; 1_000];
-                        let _ = refmut.read(&mut buffer).await.unwrap();
-                    }
-                    1
+                    read_file(&mut refmut, heap).await
                 }
                 .into_actor(self),
             );
@@ -232,4 +186,61 @@ pub mod actix_actor {
             AtomicResponse::new(fut)
         }
     }
+}
+
+#[cfg(feature = "actix-runtime")]
+async fn read_file(file: &mut File, heap: bool) -> u8 {
+    if heap {
+        let mut buffer = Vec::with_capacity(100_0000);
+        let _ = file.read(&mut buffer).await.unwrap();
+    } else {
+        let mut buffer = [0u8; 1_000];
+        let _ = file.read(&mut buffer).await.unwrap();
+    }
+    1
+}
+
+#[cfg(feature = "actix-runtime")]
+fn collect_arg(
+    target: &mut String,
+    rounds: &mut usize,
+    heap_alloc: &mut bool,
+    dynamic: &mut bool,
+) -> String {
+    let mut iter = std::env::args().into_iter();
+
+    let file_path = std::env::current_dir()
+        .ok()
+        .and_then(|path| {
+            let path = path.to_str()?.to_owned();
+            Some(path + "/sample/sample.txt")
+        })
+        .unwrap_or_else(|| String::from("./sample/sample.txt"));
+
+    loop {
+        if let Some(arg) = iter.next() {
+            if arg.as_str() == "--target" {
+                if let Some(arg) = iter.next() {
+                    *target = arg;
+                }
+            }
+            if arg.as_str() == "--rounds" {
+                if let Some(arg) = iter.next() {
+                    if let Ok(r) = arg.parse::<usize>() {
+                        *rounds = r;
+                    }
+                }
+            }
+            if arg.as_str() == "--heap-alloc" {
+                *heap_alloc = true;
+            }
+            if arg.as_str() == "--dynamic" {
+                *dynamic = true;
+            }
+            continue;
+        }
+        break;
+    }
+
+    file_path
 }

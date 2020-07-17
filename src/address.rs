@@ -3,18 +3,18 @@ use core::marker::PhantomData;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::time::Duration;
-
 use std::sync::Arc;
 
-use futures_channel::oneshot::channel;
 use futures_util::stream::{FuturesUnordered, Stream, StreamExt};
+use tokio::sync::oneshot::channel;
 
 use crate::actor::{Actor, ActorState};
-use crate::builder::{GroupSender, Sender, WeakGroupSender, WeakSender};
 use crate::context::{ActorContextState, ContextMessage};
 use crate::error::ActixSendError;
 use crate::object::FutureResultObjectContainer;
+use crate::sender::{GroupSender, Sender, WeakGroupSender, WeakSender};
 use crate::stream::ActorStream;
+use crate::subscribe::{MessageContainer, Subscribe};
 use crate::util::{future_handle::FutureHandler, runtime};
 
 // A channel sender for communicating with actor(s).
@@ -23,8 +23,9 @@ where
     A: Actor + 'static,
 {
     strong_count: Arc<AtomicUsize>,
-    tx: Sender<A>,
-    subs: GroupSender<A>,
+    tx: Sender<ContextMessage<A>>,
+    tx_subs: GroupSender<A>,
+    subs: Option<Subscribe>,
     state: ActorState<A>,
 }
 
@@ -37,6 +38,7 @@ where
         Self {
             strong_count: self.strong_count.clone(),
             tx: self.tx.clone(),
+            tx_subs: self.tx_subs.clone(),
             subs: self.subs.clone(),
             state: self.state.clone(),
         }
@@ -63,7 +65,7 @@ where
         WeakAddress {
             strong_count: self.strong_count.clone(),
             tx: self.tx.downgrade(),
-            subs: self.subs.downgrade(),
+            tx_subs: self.tx_subs.downgrade(),
             state: self.state.clone(),
         }
     }
@@ -73,13 +75,28 @@ where
         self.state.current_active()
     }
 
-    pub(crate) fn new(tx: Sender<A>, subs: GroupSender<A>, state: ActorState<A>) -> Self {
+    pub(crate) fn new(
+        tx: Sender<ContextMessage<A>>,
+        tx_subs: GroupSender<A>,
+        state: ActorState<A>,
+    ) -> Self {
+        let subs = if state.allow_subscribe() {
+            Some(Default::default())
+        } else {
+            None
+        };
+
         Self {
             strong_count: Arc::new(AtomicUsize::new(1)),
             tx,
+            tx_subs,
             subs,
             state,
         }
+    }
+
+    pub(crate) fn weak_sender(&self) -> WeakSender<ContextMessage<A>> {
+        self.tx.downgrade()
     }
 
     fn send_timeout(
@@ -158,7 +175,7 @@ where
     where
         M: Into<A::Message> + MapResult<A::Result> + Clone,
     {
-        self.subs
+        self.tx_subs
             .as_slice()
             .iter()
             .fold(FuturesUnordered::new(), |fut, sub| {
@@ -172,6 +189,46 @@ where
                     let rx = rx.await?;
                     M::map(rx)
                 };
+
+                fut.push(f);
+
+                fut
+            })
+            .collect()
+            .await
+    }
+
+    /// add an address to the subscribe list to current address.
+    pub async fn subscribe_with<AA, M>(&self, addr: &Address<AA>)
+    where
+        AA: Actor,
+        M: Send + Into<AA::Message> + 'static,
+    {
+        let weak = addr.weak_sender();
+        if let Some(subs) = self.subs.as_ref() {
+            subs.push::<AA, M>(weak).await;
+        }
+    }
+
+    /// send message to all subscribers of this actor.
+    ///
+    /// *. It's important the message type can be handled correctly by the subscriber actors.
+    ///  A typecast error would return if the message type can not by certain subscriber actor.
+    pub async fn send_subscribe<M>(&self, msg: M) -> Vec<Result<(), ActixSendError>>
+    where
+        M: Clone + Send + 'static,
+    {
+        self.subs
+            .as_ref()
+            .unwrap()
+            .lock()
+            .await
+            .iter()
+            .fold(FuturesUnordered::new(), |fut, sub| {
+                let msg = msg.clone();
+                let timeout = self.state.timeout();
+
+                let f = sub.send(MessageContainer::pack(msg), timeout);
 
                 fut.push(f);
 
@@ -291,8 +348,8 @@ where
     A: Actor,
 {
     strong_count: Arc<AtomicUsize>,
-    tx: WeakSender<A>,
-    subs: WeakGroupSender<A>,
+    tx: WeakSender<ContextMessage<A>>,
+    tx_subs: WeakGroupSender<A>,
     state: ActorState<A>,
 }
 
@@ -306,10 +363,11 @@ where
             Address {
                 strong_count: self.strong_count,
                 tx: sender,
-                subs: self
-                    .subs
+                tx_subs: self
+                    .tx_subs
                     .upgrade()
                     .expect("Failed to upgrade WeakGroupSender"),
+                subs: None,
                 state: self.state,
             }
         })

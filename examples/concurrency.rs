@@ -5,6 +5,8 @@ use std::sync::{
 };
 use std::thread::ThreadId;
 
+use futures_util::stream::{FuturesUnordered, StreamExt};
+
 use actix_send::prelude::*;
 
 use crate::non_shared_actor::NonSharedActor;
@@ -107,35 +109,42 @@ async fn main() {
     let address = builder.num(12).start().await;
 
     // send messages
-    let futures = (0..1_000)
+    let _ = (0..1_000)
         // Both shared_actor and non_shared_actor have the same type Message1
         // and we can specific call the one we want with a type path.
-        .map(|_| address.send(shared_actor::Message1))
-        .collect::<Vec<_>>();
+        .fold(FuturesUnordered::new(), |f, _| {
+            f.push(address.send(shared_actor::Message1));
+            f
+        })
+        .collect::<Vec<_>>()
+        .await;
 
-    // send messages
-    futures_util::future::join_all(futures).await;
-
-    let info = address.send(Message2).await.unwrap();
-
-    for i in info.into_iter() {
-        println!("{:?}\r\nhandled {} messages\r\n", i.thread_id, i.count);
-    }
+    address
+        .send(Message2)
+        .await
+        .unwrap()
+        .into_iter()
+        .for_each(|i| println!("{:?}\r\nhandled {} messages\r\n", i.thread_id, i.count));
 
     // build and start non share actors.
     let builder = NonSharedActor::builder(|| async { NonSharedActor { state: 0 } });
 
     let address2 = builder.num(12).start().await;
 
-    let futures = (0..1_000)
+    // send messages
+    let _ = (0..1_000)
         // Both shared_actor and non_shared_actor have the same type Message1
         // and we can specific call the one we want with a type path.
-        .map(|_| address2.send(non_shared_actor::Message1))
-        .collect::<Vec<_>>();
+        .fold(FuturesUnordered::new(), |f, _| {
+            f.push(address2.send(non_shared_actor::Message1));
+            f
+        })
+        .collect::<Vec<_>>()
+        .await;
 
-    // send messages
-    futures_util::future::join_all(futures).await;
-
-    let state = address2.send(non_shared_actor::Message1).await.unwrap();
-    println!("State is: {}, should be smaller than 1000", state);
+    address2
+        .send(non_shared_actor::Message1)
+        .await
+        .map(|state| println!("State is: {}, should be smaller than 1000", state))
+        .unwrap();
 }

@@ -1,10 +1,7 @@
 use core::fmt::{Debug, Formatter, Result as FmtResult};
 
 use async_channel::SendError;
-use futures_channel::oneshot::Canceled;
-
-use crate::actor::Actor;
-use crate::context::ContextMessage;
+use tokio::sync::oneshot::error::RecvError;
 
 pub enum ActixSendError {
     Canceled,
@@ -12,6 +9,7 @@ pub enum ActixSendError {
     Timeout,
     Blocking,
     TypeCast,
+    Subscribe,
 }
 
 impl Debug for ActixSendError {
@@ -21,7 +19,7 @@ impl Debug for ActixSendError {
         match self {
             ActixSendError::TypeCast => fmt.field("cause", &"TypeCast").field(
                 "description",
-                &"Failed to downcast Message's result type from Actor::Result",
+                &"Failed to downcast from dyn Any to a concrete type",
             ),
             ActixSendError::Timeout => fmt
                 .field("cause", &"Timeout")
@@ -36,23 +34,23 @@ impl Debug for ActixSendError {
             ActixSendError::Blocking => fmt
                 .field("cause", &"Blocking")
                 .field("description", &"Failed to run blocking code"),
+            ActixSendError::Subscribe => fmt
+                .field("cause", &"Subscribe")
+                .field("description", &"This address can not be subscribed"),
         };
 
         fmt.finish()
     }
 }
 
-impl From<Canceled> for ActixSendError {
-    fn from(_err: Canceled) -> Self {
+impl From<RecvError> for ActixSendError {
+    fn from(_err: RecvError) -> Self {
         ActixSendError::Canceled
     }
 }
 
-impl<A> From<SendError<ContextMessage<A>>> for ActixSendError
-where
-    A: Actor,
-{
-    fn from(_err: SendError<ContextMessage<A>>) -> Self {
+impl<M> From<SendError<M>> for ActixSendError {
+    fn from(_err: SendError<M>) -> Self {
         ActixSendError::Closed
     }
 }

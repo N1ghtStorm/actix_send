@@ -107,6 +107,10 @@ where
         self.config.handle_delayed_on_shutdown
     }
 
+    pub(crate) fn allow_subscribe(&self) -> bool {
+        self.config.allow_subscribe
+    }
+
     pub(crate) fn inc_active(&self) -> bool {
         self.modify_active(|active| active + UNIT)
     }
