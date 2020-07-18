@@ -8,7 +8,7 @@ use tokio::sync::oneshot::channel;
 
 use crate::actor::Actor;
 use crate::address::MapResult;
-use crate::context::ContextMessage;
+use crate::context::{ContextMessage, InstantMessage};
 use crate::error::ActixSendError;
 use crate::sender::Sender;
 
@@ -95,7 +95,7 @@ where
 {
     let (tx, rx) = channel::<A::Result>();
 
-    let msg = ContextMessage::Instant(Some(tx), item.into());
+    let msg = ContextMessage::Instant(InstantMessage::Static(Some(tx), item.into()));
     sender.send(msg).await?;
 
     let res = rx.await?;

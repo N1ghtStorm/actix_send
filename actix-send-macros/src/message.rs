@@ -630,45 +630,6 @@ impl<'a> ActorInfo<'a> {
                     subpat: None,
                 }));
 
-                // we construct an optional statement is we are wrapping blocking
-                let stmt0 = None;
-                // if !handle.is_async {
-                //     // ToDo: in case async_trait changed.
-                //     // *. Here we use a hack. #[async_trait] would transfer
-                //     // all self identifier to _self by default so we take use of
-                //     // it and map our cloned Self to _self identifier too.
-                //
-                //     let st = Stmt::Local(Local {
-                //         attrs: vec![],
-                //         let_token: Default::default(),
-                //         pat: Pat::Ident(PatIdent {
-                //             attrs: vec![],
-                //             by_ref: None,
-                //             mutability: None,
-                //             ident: Ident::new("_self", Span::call_site()),
-                //             subpat: None,
-                //         }),
-                //         init: Some((
-                //             Default::default(),
-                //             Box::new(Expr::MethodCall(ExprMethodCall {
-                //                 attrs: vec![],
-                //                 receiver: Box::new(Expr::Path(ExprPath {
-                //                     attrs: vec![],
-                //                     qself: None,
-                //                     path: path_from_ident_str("self"),
-                //                 })),
-                //                 dot_token: Default::default(),
-                //                 method: Ident::new("clone", Span::call_site()),
-                //                 turbofish: None,
-                //                 paren_token: Default::default(),
-                //                 args: Default::default(),
-                //             })),
-                //         )),
-                //         semi_token: Default::default(),
-                //     });
-                //     stmt0 = Some(st);
-                // };
-
                 // If the message have blocking attribute we wrap the method in runtime::spawn_blocking
                 let stmt1 = if handle.is_async {
                     Stmt::Local(Local {
@@ -790,10 +751,7 @@ impl<'a> ActorInfo<'a> {
                         label: None,
                         block: Block {
                             brace_token: Default::default(),
-                            stmts: match stmt0 {
-                                Some(stmt0) => vec![stmt0, stmt1, stmt2],
-                                None => vec![stmt1, stmt2],
-                            },
+                            stmts: vec![stmt1, stmt2],
                         },
                     })),
                     comma: Some(Default::default()),

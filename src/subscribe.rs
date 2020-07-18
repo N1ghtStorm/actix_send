@@ -10,7 +10,7 @@ use std::thread::JoinHandle;
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 
 use crate::actor::Actor;
-use crate::context::ContextMessage;
+use crate::context::{ContextMessage, InstantMessage};
 use crate::error::ActixSendError;
 use crate::sender::WeakSender;
 use crate::util::runtime;
@@ -64,6 +64,7 @@ where
 }
 
 // we make Subscriber to trait object so they are not bound to Actor and Message Type.
+#[allow(clippy::type_complexity)]
 pub(crate) trait SubscribeTrait {
     fn send(
         &self,
@@ -73,6 +74,7 @@ pub(crate) trait SubscribeTrait {
     ) -> Pin<Box<dyn Future<Output = Option<Result<(), ActixSendError>>> + Send + '_>>;
 }
 
+#[allow(clippy::type_complexity)]
 impl<A, M> SubscribeTrait for Subscriber<A, M>
 where
     A: Actor + 'static,
@@ -100,7 +102,10 @@ where
 {
     async fn _send(&self, msg: M, timeout: Duration) -> Result<(), ActixSendError> {
         let sender = self.sender.upgrade().ok_or(ActixSendError::Closed)?;
-        let f = sender.send(ContextMessage::Instant(None, msg.into()));
+        let f = sender.send(ContextMessage::Instant(InstantMessage::Static(
+            None,
+            msg.into(),
+        )));
 
         runtime::timeout(timeout, f).await??;
 

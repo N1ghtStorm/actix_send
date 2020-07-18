@@ -51,62 +51,80 @@ where
         }
     }
 
-    fn delayed_msg(&self, msg: ContextMessage<A>, dur: Duration) {
-        if let Some(tx) = self.tx.upgrade() {
-            let handle_delay_on_shutdown = self.state.handle_delay_on_shutdown();
-
-            let handler = spawn_cancelable(
-                Box::pin(runtime::delay_for(dur)),
-                move |either| async move {
-                    if let futures_util::future::Either::Left(_) = either {
-                        if !handle_delay_on_shutdown {
-                            return;
-                        }
-                    }
-                    let _ = tx.send(msg).await;
-                },
-            );
-
-            self.state.push_handler(vec![handler]);
-        }
-    }
-
+    // return true if we want to break the streaming loop
     async fn handle_msg(&mut self, msg: ContextMessage<A>) -> bool {
         match msg {
+            ContextMessage::Instant(msg) => self.handle_instant_msg(msg).await,
+            ContextMessage::Delayed(msg) => self.handle_delayed_msg(msg),
+            ContextMessage::Interval(msg) => self.handle_interval_msg(msg).await,
             ContextMessage::ManualShutDown(tx) => {
                 if tx.send(self.state()).is_ok() {
                     self.manual_shutdown = true;
                     return true;
                 }
             }
-            ContextMessage::Instant(tx, msg) => {
+        }
+
+        false
+    }
+
+    async fn handle_instant_msg(&mut self, msg: InstantMessage<A>) {
+        match msg {
+            InstantMessage::Static(tx, msg) => {
                 let res = self.actor.handle(msg).await;
                 if let Some(tx) = tx {
                     let _ = tx.send(res);
                 }
             }
-            ContextMessage::InstantDynamic(tx, mut fut) => {
+            InstantMessage::Dynamic(tx, mut fut) => {
                 let res = fut.handle(&mut self.actor).await;
                 if let Some(tx) = tx {
                     let _ = tx.send(res);
                 }
             }
-            ContextMessage::Delayed(msg, dur) => {
-                self.delayed_msg(ContextMessage::Instant(None, msg), dur)
-            }
-            ContextMessage::DelayedDynamic(fut, dur) => {
-                self.delayed_msg(ContextMessage::InstantDynamic(None, fut), dur)
-            }
-            ContextMessage::IntervalFutureRun(idx) => {
+        }
+    }
+
+    fn handle_delayed_msg(&self, msg: DelayedMessage<A>) {
+        let (msg, dur) = match msg {
+            DelayedMessage::Static(msg, dur) => (
+                ContextMessage::Instant(InstantMessage::Static(None, msg)),
+                dur,
+            ),
+            DelayedMessage::Dynamic(fut, dur) => (
+                ContextMessage::Instant(InstantMessage::Dynamic(None, fut)),
+                dur,
+            ),
+        };
+
+        if let Some(tx) = self.tx.upgrade() {
+            let handle_delay_on_shutdown = self.state.handle_delay_on_shutdown();
+
+            let handler = spawn_cancelable(runtime::delay_for(dur), move |either| async move {
+                if let futures_util::future::Either::Left(_) = either {
+                    if !handle_delay_on_shutdown {
+                        return;
+                    }
+                }
+                let _ = tx.send(msg).await;
+            });
+
+            self.state.push_handler(vec![handler]);
+        }
+    }
+
+    async fn handle_interval_msg(&mut self, msg: IntervalMessage<A>) {
+        match msg {
+            IntervalMessage::Run(idx) => {
                 let mut guard = self.state.interval_futures.lock().await;
                 if let Some(fut) = guard.get_mut(&idx) {
                     let _ = fut.handle(&mut self.actor).await;
                 }
             }
-            ContextMessage::IntervalFutureRemove(idx) => {
+            IntervalMessage::Remove(idx) => {
                 let _ = self.state.interval_futures.remove(idx).await;
             }
-            ContextMessage::IntervalFutureRegister(tx, interval_future, dur) => {
+            IntervalMessage::Register(tx, interval_future, dur) => {
                 // insert interval future to context and get it's index
                 let index = self.state.interval_futures.insert(interval_future).await;
 
@@ -118,10 +136,13 @@ where
                         let _ = runtime::tick(&mut interval).await;
                         match ctx_tx.upgrade() {
                             Some(tx) => {
-                                let _ = tx.send(ContextMessage::IntervalFutureRun(index)).await;
+                                let _ = tx
+                                    .send(ContextMessage::Interval(IntervalMessage::Run(index)))
+                                    .await;
                             }
                             None => break,
                         }
+                        runtime::yield_now().await;
                     }
                 });
 
@@ -136,8 +157,6 @@ where
                 let _ = tx.send(interval_handler);
             }
         }
-
-        false
     }
 
     pub(crate) fn spawn_loop(mut self) {
@@ -155,6 +174,8 @@ where
                         if should_break {
                             break;
                         }
+
+                        runtime::yield_now().await;
                     }
                 }
                 None => {
@@ -164,6 +185,8 @@ where
                         if should_break {
                             break;
                         }
+
+                        runtime::yield_now().await;
                     }
                 }
             };
@@ -206,18 +229,40 @@ where
     A: Actor,
 {
     ManualShutDown(OneshotSender<ActorContextState>),
-    Instant(Option<OneshotSender<A::Result>>, A::Message),
-    InstantDynamic(
-        Option<OneshotSender<FutureResultObjectContainer>>,
-        FutureObjectContainer<A>,
-    ),
-    Delayed(A::Message, Duration),
-    DelayedDynamic(FutureObjectContainer<A>, Duration),
-    IntervalFutureRegister(
+    Instant(InstantMessage<A>),
+    Delayed(DelayedMessage<A>),
+    Interval(IntervalMessage<A>),
+}
+
+// variants of interval future request
+pub(crate) enum IntervalMessage<A>
+where
+    A: Actor,
+{
+    Register(
         OneshotSender<FutureHandler<A>>,
         FutureObjectContainer<A>,
         Duration,
     ),
-    IntervalFutureRun(usize),
-    IntervalFutureRemove(usize),
+    Run(usize),
+    Remove(usize),
+}
+
+pub(crate) enum InstantMessage<A>
+where
+    A: Actor,
+{
+    Static(Option<OneshotSender<A::Result>>, A::Message),
+    Dynamic(
+        Option<OneshotSender<FutureResultObjectContainer>>,
+        FutureObjectContainer<A>,
+    ),
+}
+
+pub(crate) enum DelayedMessage<A>
+where
+    A: Actor,
+{
+    Static(A::Message, Duration),
+    Dynamic(FutureObjectContainer<A>, Duration),
 }

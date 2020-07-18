@@ -89,6 +89,7 @@ dependencies = [
  "futures-util",
  "num_cpus",
  "pin-project",
+ "smol",
  "tokio",
 ]
 

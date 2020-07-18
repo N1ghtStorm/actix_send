@@ -66,6 +66,7 @@ pub fn actor(meta: TokenStream, input: TokenStream) -> TokenStream {
                     {
                         type Message = ();
                         type Result = ();
+                        // ToDo: add on_start on_stop
                     }
 
                     #attr
@@ -85,6 +86,14 @@ pub fn actor(meta: TokenStream, input: TokenStream) -> TokenStream {
                     {
                         type Message = #message_enum_ident;
                         type Result = #result_enum_ident;
+
+                        fn on_start(&mut self) {
+                            self.__on_start();
+                        }
+
+                        fn on_stop(&mut self) {
+                           self.__on_stop();
+                        }
                     }
                 }
             };
@@ -821,45 +830,6 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                         })
                         .expect(&panic);
 
-                    // we construct an optional statement is we are wrapping blocking
-                    let stmt0 = None;
-                    // if is_blocking {
-                    //     // ToDo: in case async_trait changed.
-                    //     // *. Here we use a hack. #[async_trait] would transfer
-                    //     // all self identifier to _self by default so we take use of
-                    //     // it and map our cloned Self to _self identifier too.
-                    //
-                    //     let st = Stmt::Local(Local {
-                    //         attrs: vec![],
-                    //         let_token: Default::default(),
-                    //         pat: Pat::Ident(PatIdent {
-                    //             attrs: vec![],
-                    //             by_ref: None,
-                    //             mutability: None,
-                    //             ident: Ident::new("_self", Span::call_site()),
-                    //             subpat: None,
-                    //         }),
-                    //         init: Some((
-                    //             Default::default(),
-                    //             Box::new(Expr::MethodCall(ExprMethodCall {
-                    //                 attrs: vec![],
-                    //                 receiver: Box::new(Expr::Path(ExprPath {
-                    //                     attrs: vec![],
-                    //                     qself: None,
-                    //                     path: path_from_ident_str("self"),
-                    //                 })),
-                    //                 dot_token: Default::default(),
-                    //                 method: Ident::new("clone", Span::call_site()),
-                    //                 turbofish: None,
-                    //                 paren_token: Default::default(),
-                    //                 args: Default::default(),
-                    //             })),
-                    //         )),
-                    //         semi_token: Default::default(),
-                    //     });
-                    //     stmt0 = Some(st);
-                    // };
-
                     // If the message have blocking attribute we wrap the method in runtime::spawn_blocking
                     let stmt1 = if is_blocking {
                         let mut expr_call = ExprCall {
@@ -987,10 +957,7 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                             label: None,
                             block: Block {
                                 brace_token: Default::default(),
-                                stmts: match stmt0 {
-                                    Some(stmt0) => vec![stmt0, stmt1, stmt2],
-                                    None => vec![stmt1, stmt2],
-                                },
+                                stmts: vec![stmt1, stmt2],
                             },
                         })),
                         comma: Some(Default::default()),
@@ -1009,7 +976,7 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
                     path_from_ident_str(vec!["Handler"]),
                     Default::default(),
                 )),
-                self_ty: Box::new(Type::Path(type_path_from_idents(vec![actor_ident]))),
+                self_ty: Box::new(Type::Path(type_path_from_idents(vec![actor_ident.clone()]))),
                 brace_token: Default::default(),
                 items: vec![ImplItem::Method(ImplItemMethod {
                     attrs: vec![],
@@ -1052,6 +1019,12 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
 
             let expand = quote! {
                 #mod_item
+
+                // ToDo: Fix this dummy implementation
+                impl #actor_ident {
+                    pub fn __on_start(&mut self) {}
+                    pub fn __on_stop(&mut self) {}
+                }
             };
 
             expand.into()
@@ -1065,7 +1038,7 @@ pub fn handler_v2(_meta: TokenStream, input: TokenStream) -> TokenStream {
     let item = syn::parse_macro_input!(input as Item);
 
     match item {
-        Item::Impl(impl_item) => {
+        Item::Impl(mut impl_item) => {
             // get actor ident.
             let actor_ident = match impl_item.self_ty.as_ref() {
                 Type::Path(ty_path) => ty_path.path.get_ident().unwrap(),
@@ -1073,6 +1046,125 @@ pub fn handler_v2(_meta: TokenStream, input: TokenStream) -> TokenStream {
             };
 
             let mut actor_info = ActorInfo::new(actor_ident);
+
+            // find method that with on_start attribute and remove the item.
+            let mut on_start: Option<ImplItemMethod> = None;
+            let mut on_stop: Option<ImplItemMethod> = None;
+
+            impl_item.items.retain(|f| match f {
+                ImplItem::Method(method) => {
+                    if is_ident(&method.attrs, "on_start").is_some() {
+                        on_start = Some(method.clone());
+                        return false;
+                    }
+                    if is_ident(&method.attrs, "on_stop").is_some() {
+                        on_stop = Some(method.clone());
+                        return false;
+                    }
+                    true
+                }
+                _ => false,
+            });
+
+            let mut on_start_method = ImplItemMethod {
+                attrs: vec![],
+                vis: Visibility::Public(VisPublic {
+                    pub_token: Default::default(),
+                }),
+                defaultness: None,
+                sig: Signature {
+                    constness: None,
+                    asyncness: None,
+                    unsafety: None,
+                    abi: None,
+                    fn_token: Default::default(),
+                    ident: Ident::new("__on_start", Span::call_site()),
+                    generics: Default::default(),
+                    paren_token: Default::default(),
+                    inputs: Default::default(),
+                    variadic: None,
+                    output: ReturnType::Default,
+                },
+                block: Block {
+                    brace_token: Default::default(),
+                    stmts: vec![],
+                },
+            };
+
+            let mut on_stop_method = ImplItemMethod {
+                attrs: vec![],
+                vis: Visibility::Public(VisPublic {
+                    pub_token: Default::default(),
+                }),
+                defaultness: None,
+                sig: Signature {
+                    constness: None,
+                    asyncness: None,
+                    unsafety: None,
+                    abi: None,
+                    fn_token: Default::default(),
+                    ident: Ident::new("__on_stop", Span::call_site()),
+                    generics: Default::default(),
+                    paren_token: Default::default(),
+                    inputs: Default::default(),
+                    variadic: None,
+                    output: ReturnType::Default,
+                },
+                block: Block {
+                    brace_token: Default::default(),
+                    stmts: vec![],
+                },
+            };
+
+            let self_arg = FnArg::Receiver(Receiver {
+                attrs: vec![],
+                reference: Some(Default::default()),
+                mutability: Some(Default::default()),
+                self_token: Default::default(),
+            });
+
+            on_start_method.sig.inputs.push(self_arg.clone());
+            on_stop_method.sig.inputs.push(self_arg.clone());
+
+            // construct on_start and on_stop impl if there is any.
+
+            if let Some(mut method) = on_start.take() {
+                method.attrs.retain(|attr| {
+                    attr.path
+                        .get_ident()
+                        .map(|ident| ident.to_string().as_str() != "on_start")
+                        .unwrap_or(true)
+                });
+                on_start_method.attrs = method.attrs;
+                on_start_method.block.stmts = method.block.stmts;
+            }
+
+            if let Some(mut method) = on_stop.take() {
+                method.attrs.retain(|attr| {
+                    attr.path
+                        .get_ident()
+                        .map(|ident| ident.to_string().as_str() != "on_stop")
+                        .unwrap_or(true)
+                });
+
+                on_stop_method.attrs = method.attrs;
+                on_stop_method.block.stmts = method.block.stmts;
+            }
+
+            let on_start_stop = Item::Impl(ItemImpl {
+                attrs: vec![],
+                defaultness: None,
+                unsafety: None,
+                impl_token: Default::default(),
+                generics: Default::default(),
+                trait_: None,
+                self_ty: impl_item.self_ty.clone(),
+                brace_token: Default::default(),
+                items: vec![
+                    ImplItem::Method(on_start_method),
+                    ImplItem::Method(on_stop_method),
+                ],
+            });
 
             let handle_info = impl_item
                 .items
@@ -1095,6 +1187,7 @@ pub fn handler_v2(_meta: TokenStream, input: TokenStream) -> TokenStream {
             let items = &actor_info.items;
 
             let expand = quote! {
+                #on_start_stop
 
                 #message_enum
                 #result_enum

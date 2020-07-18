@@ -9,7 +9,9 @@ use futures_util::stream::{FuturesUnordered, Stream, StreamExt};
 use tokio::sync::oneshot::channel;
 
 use crate::actor::{Actor, ActorState};
-use crate::context::{ActorContextState, ContextMessage};
+use crate::context::{
+    ActorContextState, ContextMessage, DelayedMessage, InstantMessage, IntervalMessage,
+};
 use crate::error::ActixSendError;
 use crate::object::FutureResultObjectContainer;
 use crate::sender::{GroupSender, Sender, WeakGroupSender, WeakSender};
@@ -128,7 +130,7 @@ where
     {
         let (tx, rx) = channel::<A::Result>();
 
-        let msg = ContextMessage::Instant(Some(tx), msg.into());
+        let msg = ContextMessage::Instant(InstantMessage::Static(Some(tx), msg.into()));
 
         self.send_timeout(msg).await?;
 
@@ -139,7 +141,7 @@ where
 
     /// Send a message to actor(s) and ignore the result.
     pub fn do_send(&self, msg: impl Into<A::Message>) {
-        let msg = ContextMessage::Instant(None, msg.into());
+        let msg = ContextMessage::Instant(InstantMessage::Static(None, msg.into()));
         let this = self.tx.clone();
         runtime::spawn(async move {
             let _ = this.send(msg).await;
@@ -155,7 +157,7 @@ where
         msg: impl Into<A::Message>,
         delay: Duration,
     ) -> Result<(), ActixSendError> {
-        let msg = ContextMessage::Delayed(msg.into(), delay);
+        let msg = ContextMessage::Delayed(DelayedMessage::Static(msg.into(), delay));
         self.send_timeout(msg).await?;
         Ok(())
     }
@@ -192,7 +194,8 @@ where
             .fold(FuturesUnordered::new(), |fut, sub| {
                 let (tx, rx) = channel::<A::Result>();
 
-                let msg = ContextMessage::Instant(Some(tx), msg.clone().into());
+                let msg =
+                    ContextMessage::Instant(InstantMessage::Static(Some(tx), msg.clone().into()));
 
                 let f = async move {
                     let f = sub.send(msg);
@@ -294,7 +297,7 @@ macro_rules! address_run {
 
                 let object = crate::object::FutureObject(f, PhantomData, PhantomData).pack();
 
-                let msg = ContextMessage::InstantDynamic(Some(tx), object);
+                let msg = ContextMessage::Instant(InstantMessage::Dynamic(Some(tx), object));
 
                 self.send_timeout(msg).await?;
 
@@ -307,7 +310,7 @@ macro_rules! address_run {
                 F: FnMut(&mut A) -> Pin<Box<dyn Future<Output = ()> $( + $send)* + '_>> + Send + 'static,
             {
                 let object = crate::object::FutureObject(f, PhantomData, PhantomData).pack();
-                let msg = ContextMessage::InstantDynamic(None, object);
+                let msg = ContextMessage::Instant(InstantMessage::Dynamic(None, object));
 
                 let this = self.tx.clone();
                 runtime::spawn(async move {
@@ -325,7 +328,7 @@ macro_rules! address_run {
             {
                 let object = crate::object::FutureObject(f, PhantomData, PhantomData).pack();
 
-                let msg = ContextMessage::DelayedDynamic(object, delay);
+                let msg = ContextMessage::Delayed(DelayedMessage::Dynamic(object, delay));
 
                 self.send_timeout(msg).await?;
 
@@ -350,7 +353,7 @@ macro_rules! address_run {
 
                 let object = crate::object::FutureObject(f, PhantomData, PhantomData).pack();
 
-                let msg = ContextMessage::IntervalFutureRegister(tx, object, dur);
+                let msg = ContextMessage::Interval(IntervalMessage::Register(tx, object, dur));
 
                 self.send_timeout(msg).await?;
 

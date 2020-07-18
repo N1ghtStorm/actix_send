@@ -6,7 +6,7 @@ use std::sync::Arc;
 use futures_util::future::Either;
 
 use crate::actor::Actor;
-use crate::context::ContextMessage;
+use crate::context::{ContextMessage, IntervalMessage};
 use crate::sender::WeakSender;
 use crate::util::lock::SimpleSpinLock;
 use crate::util::runtime;
@@ -115,7 +115,9 @@ where
             if let Some(tx) = tx.upgrade() {
                 let index = *index;
                 runtime::spawn(async move {
-                    let _ = tx.send(ContextMessage::IntervalFutureRemove(index)).await;
+                    let _ = tx
+                        .send(ContextMessage::Interval(IntervalMessage::Remove(index)))
+                        .await;
                 });
             }
         }
