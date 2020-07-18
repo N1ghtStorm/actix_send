@@ -10,6 +10,7 @@ pub enum ActixSendError {
     Blocking,
     TypeCast,
     Subscribe,
+    Broadcast,
 }
 
 impl Debug for ActixSendError {
@@ -37,6 +38,9 @@ impl Debug for ActixSendError {
             ActixSendError::Subscribe => fmt
                 .field("cause", &"Subscribe")
                 .field("description", &"This address can not be subscribed"),
+            ActixSendError::Broadcast => fmt
+                .field("cause", &"Broadcast")
+                .field("description", &"This address can not broadcasting"),
         };
 
         fmt.finish()

@@ -107,6 +107,10 @@ where
         self.config.handle_delayed_on_shutdown
     }
 
+    pub(crate) fn allow_broadcast(&self) -> bool {
+        self.config.allow_broadcast
+    }
+
     pub(crate) fn allow_subscribe(&self) -> bool {
         self.config.allow_subscribe
     }

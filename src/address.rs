@@ -24,7 +24,7 @@ where
 {
     strong_count: Arc<AtomicUsize>,
     tx: Sender<ContextMessage<A>>,
-    tx_subs: GroupSender<A>,
+    tx_subs: Option<GroupSender<A>>,
     subs: Option<Subscribe>,
     state: ActorState<A>,
 }
@@ -65,7 +65,7 @@ where
         WeakAddress {
             strong_count: self.strong_count.clone(),
             tx: self.tx.downgrade(),
-            tx_subs: self.tx_subs.downgrade(),
+            tx_subs: self.tx_subs.as_ref().map(|sub| sub.downgrade()),
             state: self.state.clone(),
         }
     }
@@ -82,6 +82,12 @@ where
     ) -> Self {
         let subs = if state.allow_subscribe() {
             Some(Default::default())
+        } else {
+            None
+        };
+
+        let tx_subs = if state.allow_broadcast() {
+            Some(tx_subs)
         } else {
             None
         };
@@ -175,7 +181,12 @@ where
     where
         M: Into<A::Message> + MapResult<A::Result> + Clone,
     {
-        self.tx_subs
+        let tx_subs = match self.tx_subs.as_ref() {
+            Some(group) => group,
+            None => return vec![Err(ActixSendError::Broadcast)],
+        };
+
+        tx_subs
             .as_slice()
             .iter()
             .fold(FuturesUnordered::new(), |fut, sub| {
@@ -200,15 +211,20 @@ where
 
     /// add an address to the subscribe list to current address.
     #[must_use = "futures do nothing unless you `.await` or poll them"]
-    pub async fn subscribe_with<AA, M>(&self, addr: &Address<AA>)
+    pub async fn subscribe_with<AA, M>(&self, addr: &Address<AA>) -> Result<(), ActixSendError>
     where
         AA: Actor,
         M: Send + Into<AA::Message> + 'static,
     {
         let weak = addr.weak_sender();
-        if let Some(subs) = self.subs.as_ref() {
-            subs.push::<AA, M>(weak).await;
-        }
+
+        self.subs
+            .as_ref()
+            .ok_or(ActixSendError::Subscribe)?
+            .push::<AA, M>(weak)
+            .await;
+
+        Ok(())
     }
 
     /// send message to all subscribers of this actor.
@@ -356,7 +372,7 @@ where
 {
     strong_count: Arc<AtomicUsize>,
     tx: WeakSender<ContextMessage<A>>,
-    tx_subs: WeakGroupSender<A>,
+    tx_subs: Option<WeakGroupSender<A>>,
     state: ActorState<A>,
 }
 
@@ -372,8 +388,7 @@ where
                 tx: sender,
                 tx_subs: self
                     .tx_subs
-                    .upgrade()
-                    .expect("Failed to upgrade WeakGroupSender"),
+                    .map(|sub| sub.upgrade().expect("Failed to upgrade WeakGroupSender")),
                 subs: None,
                 state: self.state,
             }

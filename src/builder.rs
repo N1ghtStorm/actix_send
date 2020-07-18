@@ -57,6 +57,7 @@ pub struct Config {
     pub num: usize,
     pub restart_on_err: bool,
     pub handle_delayed_on_shutdown: bool,
+    pub allow_broadcast: bool,
     pub allow_subscribe: bool,
     pub timeout: Duration,
 }
@@ -67,6 +68,7 @@ impl Default for Config {
             num: 1,
             restart_on_err: false,
             handle_delayed_on_shutdown: false,
+            allow_broadcast: false,
             allow_subscribe: false,
             timeout: Duration::from_secs(10),
         }
@@ -112,7 +114,15 @@ where
         self
     }
 
-    /// Allow other actors subscribe to our actors.
+    /// Allow broadcasting a message to all actor instance of one address.
+    ///
+    /// Default is false
+    pub fn allow_broadcast(mut self) -> Self {
+        self.config.allow_broadcast = true;
+        self
+    }
+
+    /// Allow other actors bounded to a different address subscribe to our address.
     ///
     /// Default is false
     pub fn allow_subscribe(mut self) -> Self {
@@ -133,9 +143,16 @@ where
         for i in 0..num {
             let actor = self.actor_builder.build().await;
 
-            let (tx_sub, rx_sub) = bounded::<ContextMessage<A>>(num);
+            let rx_sub = match state.allow_broadcast() {
+                true => {
+                    let (tx_sub, rx_sub) = bounded::<ContextMessage<A>>(num);
 
-            subs.push(tx_sub);
+                    subs.push(tx_sub);
+
+                    Some(rx_sub)
+                }
+                false => None,
+            };
 
             ActorContext::new(i, tx.downgrade(), rx.clone(), rx_sub, actor, state.clone())
                 .spawn_loop();
@@ -164,9 +181,16 @@ where
 
             let actor = self.actor_builder.build().await;
 
-            let (tx_sub, rx_sub) = bounded::<ContextMessage<A>>(num);
+            let rx_sub = match state.allow_broadcast() {
+                true => {
+                    let (tx_sub, rx_sub) = bounded::<ContextMessage<A>>(num);
 
-            subs.push(tx_sub);
+                    subs.push(tx_sub);
+
+                    Some(rx_sub)
+                }
+                false => None,
+            };
 
             let ctx =
                 ActorContext::new(i, tx.downgrade(), rx.clone(), rx_sub, actor, state.clone());

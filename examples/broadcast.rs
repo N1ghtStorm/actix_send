@@ -37,7 +37,8 @@ async fn main() {
         async { MyActor { state } }
     });
 
-    let address: Address<MyActor> = builder.num(8).start().await;
+    // call allow_broadcast to enable the functionality
+    let address: Address<MyActor> = builder.num(8).allow_broadcast().start().await;
 
     /*
        broadcast a message to every actor of this address.

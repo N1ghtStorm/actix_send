@@ -58,18 +58,22 @@ async fn main() {
     // We need to infer the message type we want to subscribe in the type signature.
     address_master
         .subscribe_with::<_, Message>(&address_slave1)
-        .await;
+        .await
+        .unwrap();
     address_master
         .subscribe_with::<_, Message>(&address_slave2)
-        .await;
+        .await
+        .unwrap();
 
     // We can infer different type for a given address.
     address_master
         .subscribe_with::<_, Message2>(&address_slave1)
-        .await;
+        .await
+        .unwrap();
     address_master
         .subscribe_with::<_, Message2>(&address_slave2)
-        .await;
+        .await
+        .unwrap();
 
     // We send a message to the subscribers.
     let res = address_master.send_subscribe(Message).await;
