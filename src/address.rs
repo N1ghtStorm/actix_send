@@ -199,6 +199,7 @@ where
     }
 
     /// add an address to the subscribe list to current address.
+    #[must_use = "futures do nothing unless you `.await` or poll them"]
     pub async fn subscribe_with<AA, M>(&self, addr: &Address<AA>)
     where
         AA: Actor,
@@ -215,6 +216,7 @@ where
     /// *. It's important the message type can be handled correctly by the subscriber actors.
     ///  A typecast error would return if the message type can not be handled by certain subscriber
     /// actor.
+    #[must_use = "futures do nothing unless you `.await` or poll them"]
     pub async fn send_subscribe<M>(&self, msg: M) -> Vec<Result<(), ActixSendError>>
     where
         M: Clone + Send + 'static,
@@ -245,6 +247,7 @@ where
     /// Close one actor context for this address.
     ///
     /// Would a return a struct contains the closed context's state.
+    #[must_use = "futures do nothing unless you `.await` or poll them"]
     pub async fn close_one(&self) -> Result<ActorContextState, ActixSendError> {
         let (tx, rx) = channel();
         let msg = ContextMessage::ManualShutDown(tx);

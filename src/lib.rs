@@ -151,5 +151,7 @@ pub mod prelude {
     pub use async_trait::async_trait;
 }
 
+pub use crate::builder::Builder;
+
 #[cfg(all(feature = "tokio-runtime", feature = "async-std-runtime"))]
 compile_error!("Only one runtime can be enabled");

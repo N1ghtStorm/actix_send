@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 
-use crate::builder::{Builder, Config};
+use crate::builder::{Builder, BuilderFnContainer, Config};
 use crate::interval::IntervalFutureSet;
 use crate::util::future_handle::FutureHandler;
 
@@ -18,13 +18,13 @@ where
     type Result: Send;
 
     /// define a new builder for an new set of actor(s) with the async closure.
-    fn builder<F, Fut>(f: F) -> Builder<Self, Fut>
+    fn builder<F, Fut>(f: F) -> Builder<Self>
     where
         F: Fn() -> Fut + Send + 'static,
         Fut: Future<Output = Self> + Send + 'static,
     {
         Builder {
-            actor_builder: Box::new(f),
+            actor_builder: BuilderFnContainer::new(f),
             config: Default::default(),
         }
     }

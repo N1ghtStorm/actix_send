@@ -1,4 +1,5 @@
 use core::future::Future;
+use core::pin::Pin;
 use core::time::Duration;
 
 use async_channel::{bounded, unbounded};
@@ -8,13 +9,47 @@ use crate::address::Address;
 use crate::context::{ActorContext, ContextMessage};
 use crate::sender::Sender;
 
-pub struct Builder<A, F>
+pub struct Builder<A>
 where
     A: Actor,
-    F: Future<Output = A>,
 {
-    pub(crate) actor_builder: Box<dyn Fn() -> F>,
+    pub actor_builder: BuilderFnContainer<A>,
     pub config: Config,
+}
+
+// A container for builder function of actor instance.
+// We box the function into a trait object to make it easier to work with for less type signatures.
+pub struct BuilderFnContainer<A> {
+    inner: Box<dyn BuilderFnTrait<A>>,
+}
+
+impl<A> BuilderFnContainer<A> {
+    pub(crate) fn new<F, Fut>(f: F) -> Self
+    where
+        F: Fn() -> Fut + Send + 'static,
+        Fut: Future<Output = A> + Send + 'static,
+    {
+        Self { inner: Box::new(f) }
+    }
+
+    async fn build(&self) -> A {
+        self.inner.as_ref().build().await
+    }
+}
+
+// A trait would call build method on our actor builder function
+pub trait BuilderFnTrait<A> {
+    fn build(&self) -> Pin<Box<dyn Future<Output = A> + '_>>;
+}
+
+impl<A, F, Fut> BuilderFnTrait<A> for F
+where
+    F: Fn() -> Fut,
+    Fut: Future<Output = A>,
+{
+    fn build(&self) -> Pin<Box<dyn Future<Output = A> + '_>> {
+        Box::pin(async move { self().await })
+    }
 }
 
 #[derive(Clone)]
@@ -38,10 +73,9 @@ impl Default for Config {
     }
 }
 
-impl<A, F> Builder<A, F>
+impl<A> Builder<A>
 where
     A: Actor + Handler + 'static,
-    F: Future<Output = A>,
 {
     /// Build multiple actors with the num passed.
     ///
@@ -97,7 +131,7 @@ where
         let mut subs = Vec::with_capacity(num);
 
         for i in 0..num {
-            let actor = (self.actor_builder)().await;
+            let actor = self.actor_builder.build().await;
 
             let (tx_sub, rx_sub) = bounded::<ContextMessage<A>>(num);
 
@@ -128,7 +162,7 @@ where
         for i in 0..num {
             let index = i % len;
 
-            let actor = (self.actor_builder)().await;
+            let actor = self.actor_builder.build().await;
 
             let (tx_sub, rx_sub) = bounded::<ContextMessage<A>>(num);
 

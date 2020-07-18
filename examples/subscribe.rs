@@ -1,7 +1,7 @@
 use actix_send::prelude::*;
 
-// Actor type2
-#[actor]
+// Actor types
+#[actor(no_static)]
 pub struct MasterActor;
 
 #[actor]
@@ -17,13 +17,6 @@ pub struct Message;
 
 #[derive(Clone)]
 pub struct Message2;
-
-// handler implement
-#[handler_v2]
-impl MasterActor {
-    async fn handle_msg(&mut self, _msg1: Message) {}
-    async fn handle_msg2(&mut self, _msg1: Message2) {}
-}
 
 #[handler_v2]
 impl SlaveActor1 {

@@ -1,6 +1,7 @@
-use std::time::Duration;
+use core::time::Duration;
 
 use actix_send::prelude::*;
+use actix_send::Builder;
 
 use crate::my_actor::*;
 
@@ -42,14 +43,7 @@ pub mod my_actor {
 
 #[tokio::test]
 async fn basic() {
-    let builder = TestActor::builder(|| async {
-        let state1 = String::from("running1");
-        let state2 = String::from("running2");
-
-        TestActor { state1, state2 }
-    });
-
-    let address = builder.num(1).start().await;
+    let address = test_actor_builder().num(1).start().await;
 
     let msg = DummyMessage1 {
         from: "a simple test".to_string(),
@@ -66,14 +60,7 @@ async fn basic() {
 
 #[tokio::test]
 async fn weak_addr() {
-    let builder = TestActor::builder(|| async {
-        let state1 = String::from("running1");
-        let state2 = String::from("running2");
-
-        TestActor { state1, state2 }
-    });
-
-    let address = builder.start().await;
+    let address = test_actor_builder().start().await;
 
     let weak = address.downgrade();
     drop(address);
@@ -83,14 +70,7 @@ async fn weak_addr() {
 
 #[tokio::test]
 async fn active_count() {
-    let builder = TestActor::builder(|| async {
-        let state1 = String::from("running1");
-        let state2 = String::from("running2");
-
-        TestActor { state1, state2 }
-    });
-
-    let address = builder.num(8).start().await;
+    let address = test_actor_builder().num(8).start().await;
 
     let _ = tokio::time::delay_for(Duration::from_secs(1)).await;
 
@@ -101,4 +81,13 @@ async fn active_count() {
     let _ = address.close_one().await;
 
     assert_eq!(address.current_active(), 5);
+}
+
+fn test_actor_builder() -> Builder<TestActor> {
+    TestActor::builder(|| async {
+        let state1 = String::from("running1");
+        let state2 = String::from("running2");
+
+        TestActor { state1, state2 }
+    })
 }

@@ -1,9 +1,11 @@
 use core::any::Any;
 use core::future::Future;
+use core::marker::PhantomData;
 use core::pin::Pin;
-use std::marker::PhantomData;
+use core::time::Duration;
+
 use std::sync::Arc;
-use std::time::Duration;
+use std::thread::JoinHandle;
 
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 
@@ -12,9 +14,9 @@ use crate::context::ContextMessage;
 use crate::error::ActixSendError;
 use crate::sender::WeakSender;
 use crate::util::runtime;
-use std::thread::JoinHandle;
 
-// subscribe hold a vector of trait objects which are boxed WeakSender<ContextMessage<Actor>>
+// subscribe hold a vector of trait objects which are boxed Subscriber that contains
+// Sender<ContextMessage<Actor>> and an associate message type.
 pub(crate) struct Subscribe {
     inner: Arc<AsyncMutex<Vec<Box<dyn SubscribeTrait + Send>>>>,
 }
@@ -61,10 +63,53 @@ where
     _message: PhantomData<JoinHandle<M>>,
 }
 
-// We have to make our message type a trait object when we want to send a message to multiple actors
-// in a single function call. Because ContextMessage<A> is bound to A which is a single actor type.
+// we make Subscriber to trait object so they are not bound to Actor and Message Type.
+pub(crate) trait SubscribeTrait {
+    fn send(
+        &self,
+        // Input message type have to be boxed too.
+        msg: MessageContainer,
+        timeout: Duration,
+    ) -> Pin<Box<dyn Future<Output = Option<Result<(), ActixSendError>>> + Send + '_>>;
+}
+
+impl<A, M> SubscribeTrait for Subscriber<A, M>
+where
+    A: Actor + 'static,
+    M: Send + Into<A::Message> + 'static,
+{
+    fn send(
+        &self,
+        mut msg: MessageContainer,
+        timeout: Duration,
+    ) -> Pin<Box<dyn Future<Output = Option<Result<(), ActixSendError>>> + Send + '_>> {
+        Box::pin(async move {
+            // We downcast message trait object to the Message type of WeakSender.
+
+            let msg = msg.inner.as_any_mut().downcast_mut::<Option<M>>()?.take()?;
+            let res = self._send(msg, timeout).await;
+            Some(res)
+        })
+    }
+}
+
+impl<A, M> Subscriber<A, M>
+where
+    A: Actor + 'static,
+    M: Send + Into<A::Message> + 'static,
+{
+    async fn _send(&self, msg: M, timeout: Duration) -> Result<(), ActixSendError> {
+        let sender = self.sender.upgrade().ok_or(ActixSendError::Closed)?;
+        let f = sender.send(ContextMessage::Instant(None, msg.into()));
+
+        runtime::timeout(timeout, f).await??;
+
+        Ok(())
+    }
+}
+
 trait MessageTrait {
-    fn as_mut_any(&mut self) -> &mut dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
 // a container for message trait object
@@ -84,57 +129,13 @@ impl MessageContainer {
     }
 }
 
-// impl Message trait for Option<ContextMessageWithSender> as we want to take it out after downcast.
+// impl Message trait for Option<MessageType>.
 impl<M> MessageTrait for Option<M>
 where
     M: Send + 'static,
 {
     // cast self to any so we can downcast it to a concrete type.
-    fn as_mut_any(&mut self) -> &mut dyn Any {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
         self
-    }
-}
-
-// we make WeakSender and Message type to trait objects so they can not bound to A: Actor.
-pub(crate) trait SubscribeTrait {
-    fn send(
-        &self,
-        msg: MessageContainer,
-        timeout: Duration,
-    ) -> Pin<Box<dyn Future<Output = Option<Result<(), ActixSendError>>> + Send + '_>>;
-}
-
-impl<A, M> SubscribeTrait for Subscriber<A, M>
-where
-    A: Actor + 'static,
-    M: Send + Into<A::Message> + 'static,
-{
-    fn send(
-        &self,
-        mut msg: MessageContainer,
-        timeout: Duration,
-    ) -> Pin<Box<dyn Future<Output = Option<Result<(), ActixSendError>>> + Send + '_>> {
-        Box::pin(async move {
-            // We downcast message trait object to the Message type of WeakSender.
-
-            let msg = msg.inner.as_mut_any().downcast_mut::<Option<M>>()?.take()?;
-            let res = self._send(msg, timeout).await;
-            Some(res)
-        })
-    }
-}
-
-impl<A, M> Subscriber<A, M>
-where
-    A: Actor + 'static,
-    M: Send + Into<A::Message> + 'static,
-{
-    async fn _send(&self, msg: M, timeout: Duration) -> Result<(), ActixSendError> {
-        let sender = self.sender.upgrade().ok_or(ActixSendError::Closed)?;
-        let f = sender.send(ContextMessage::Instant(None, msg.into()));
-
-        runtime::timeout(timeout, f).await??;
-
-        Ok(())
     }
 }
