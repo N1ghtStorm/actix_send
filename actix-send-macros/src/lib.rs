@@ -8,10 +8,9 @@ use syn::{
     AttrStyle, Attribute, AttributeArgs, Block, Expr, ExprAsync, ExprAwait, ExprBlock, ExprCall,
     ExprClosure, ExprMacro, ExprMatch, ExprPath, Field, Fields, FieldsUnnamed, FnArg,
     GenericArgument, Generics, Ident, ImplItem, ImplItemMethod, ImplItemType, Item, ItemEnum,
-    ItemImpl, Lit, Local, Macro, MacroDelimiter, Meta, MetaNameValue, NestedMeta,
-    ParenthesizedGenericArguments, Pat, PatIdent, PatTuple, PatTupleStruct, PatType, PatWild, Path,
-    PathArguments, PathSegment, Receiver, ReturnType, Signature, Stmt, Type, TypePath, Variant,
-    VisPublic, Visibility,
+    ItemImpl, Local, Macro, MacroDelimiter, Meta, NestedMeta, ParenthesizedGenericArguments, Pat,
+    PatIdent, PatTuple, PatTupleStruct, PatType, PatWild, Path, PathArguments, PathSegment,
+    Receiver, ReturnType, Signature, Stmt, Type, TypePath, Variant, VisPublic, Visibility,
 };
 
 use crate::message::{ActorInfo, HandleMethodInfo};
@@ -87,12 +86,16 @@ pub fn actor(meta: TokenStream, input: TokenStream) -> TokenStream {
                         type Message = #message_enum_ident;
                         type Result = #result_enum_ident;
 
-                        fn on_start(&mut self) {
-                            self.__on_start();
+                        fn on_start(&mut self) -> core::pin::Pin<Box<dyn core::future::Future<Output = ()>  + Send + '_>> {
+                            Box::pin(async move {
+                                self.__on_start().await;
+                            })
                         }
 
-                        fn on_stop(&mut self) {
-                           self.__on_stop();
+                        fn on_stop(&mut self) -> core::pin::Pin<Box<dyn core::future::Future<Output = ()> + Send + '_>> {
+                            Box::pin(async move {
+                                self.__on_stop().await;
+                            })
                         }
                     }
                 }
@@ -104,38 +107,6 @@ pub fn actor(meta: TokenStream, input: TokenStream) -> TokenStream {
             unreachable!("Actor must be a struct");
         }
     }
-}
-
-const PANIC: &str = "message(result = \"T\") must be presented in attributes.";
-
-#[proc_macro_attribute]
-pub fn message(meta: TokenStream, input: TokenStream) -> TokenStream {
-    let args = syn::parse_macro_input!(meta as AttributeArgs);
-    let item = syn::parse_macro_input!(input as Item);
-
-    let arg = args.first().expect(PANIC);
-
-    let result = match arg {
-        NestedMeta::Meta(meta) => {
-            let _seg = meta
-                .path()
-                .segments
-                .iter()
-                .find(|s| s.ident == "result")
-                .expect(PANIC);
-
-            match meta {
-                Meta::NameValue(MetaNameValue {
-                    lit: Lit::Str(lit_str),
-                    ..
-                }) => syn::parse_str::<syn::Type>(lit_str.value().as_str()).expect(PANIC),
-                _ => panic!(PANIC),
-            }
-        }
-        _ => panic!(PANIC),
-    };
-
-    static_message(item, result)
 }
 
 #[proc_macro_attribute]
@@ -1022,8 +993,8 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
 
                 // ToDo: Fix this dummy implementation
                 impl #actor_ident {
-                    pub fn __on_start(&mut self) {}
-                    pub fn __on_stop(&mut self) {}
+                    pub async fn __on_start(&mut self) {}
+                    pub async fn __on_stop(&mut self) {}
                 }
             };
 
@@ -1074,7 +1045,7 @@ pub fn handler_v2(_meta: TokenStream, input: TokenStream) -> TokenStream {
                 defaultness: None,
                 sig: Signature {
                     constness: None,
-                    asyncness: None,
+                    asyncness: Some(Default::default()),
                     unsafety: None,
                     abi: None,
                     fn_token: Default::default(),
@@ -1091,30 +1062,8 @@ pub fn handler_v2(_meta: TokenStream, input: TokenStream) -> TokenStream {
                 },
             };
 
-            let mut on_stop_method = ImplItemMethod {
-                attrs: vec![],
-                vis: Visibility::Public(VisPublic {
-                    pub_token: Default::default(),
-                }),
-                defaultness: None,
-                sig: Signature {
-                    constness: None,
-                    asyncness: None,
-                    unsafety: None,
-                    abi: None,
-                    fn_token: Default::default(),
-                    ident: Ident::new("__on_stop", Span::call_site()),
-                    generics: Default::default(),
-                    paren_token: Default::default(),
-                    inputs: Default::default(),
-                    variadic: None,
-                    output: ReturnType::Default,
-                },
-                block: Block {
-                    brace_token: Default::default(),
-                    stmts: vec![],
-                },
-            };
+            let mut on_stop_method = on_start_method.clone();
+            on_stop_method.sig.ident = Ident::new("__on_stop", Span::call_site());
 
             let self_arg = FnArg::Receiver(Receiver {
                 attrs: vec![],
@@ -1322,44 +1271,6 @@ fn is_ident<'a>(attrs: &'a [Attribute], ident_str: &str) -> Option<&'a Attribute
             })
             .unwrap_or(false)
     })
-}
-
-fn static_message(item: Item, result: Type) -> TokenStream {
-    match item {
-        Item::Struct(struct_item) => {
-            let ident = &struct_item.ident;
-            let (impl_gen, impl_ty, impl_where) = struct_item.generics.split_for_impl();
-
-            let expended = quote! {
-                    #struct_item
-
-                    impl #impl_gen Message for #ident #impl_ty
-                    #impl_where
-                    {
-                        type Result = #result;
-                    }
-            };
-
-            expended.into()
-        }
-        Item::Enum(enum_item) => {
-            let ident = &enum_item.ident;
-            let (impl_gen, impl_ty, impl_where) = enum_item.generics.split_for_impl();
-
-            let expended = quote! {
-                    #enum_item
-
-                    impl #impl_gen Message for #ident #impl_ty
-                    #impl_where
-                    {
-                        type Result = #result;
-                    }
-            };
-
-            expended.into()
-        }
-        _ => unreachable!("Message must be a struct"),
-    }
 }
 
 // helper function for generating attribute.

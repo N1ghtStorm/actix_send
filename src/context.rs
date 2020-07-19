@@ -161,7 +161,7 @@ where
 
     pub(crate) fn spawn_loop(mut self) {
         runtime::spawn(async {
-            self.actor.on_start();
+            self.actor.on_start().await;
             self.state.inc_active();
 
             match self.rx_sub.as_ref() {
@@ -197,7 +197,7 @@ where
                 return self.spawn_loop();
             };
 
-            self.actor.on_stop();
+            self.actor.on_stop().await;
         });
     }
 

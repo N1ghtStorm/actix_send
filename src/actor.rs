@@ -1,4 +1,5 @@
 use core::future::Future;
+use core::pin::Pin;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::time::Duration;
 
@@ -35,13 +36,17 @@ where
     ///
     /// *. This would apply to restart process if `Builder::restart_on_err` is set to true
     #[allow(unused_variables)]
-    fn on_start(&mut self) {}
+    fn on_start(&mut self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async {})
+    }
 
     /// Called before actor stop. Actor's context would be passed as argument.
     ///
     /// *. This would apply to every single instance of actor(s)
     #[allow(unused_variables)]
-    fn on_stop(&mut self) {}
+    fn on_stop(&mut self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async {})
+    }
 }
 
 // a marker bit for lower bit of usize. can be used to notify if address is dropping.

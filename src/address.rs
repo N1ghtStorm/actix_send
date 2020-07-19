@@ -240,10 +240,12 @@ where
     where
         M: Clone + Send + 'static,
     {
-        self.subs
-            .as_ref()
-            .unwrap()
-            .lock()
+        let subs = match self.subs.as_ref() {
+            Some(group) => group,
+            None => return vec![Err(ActixSendError::Subscribe)],
+        };
+
+        subs.lock()
             .await
             .iter()
             .fold(FuturesUnordered::new(), |fut, sub| {
