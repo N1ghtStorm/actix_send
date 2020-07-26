@@ -1,4 +1,3 @@
-use core::any::Any;
 use core::future::Future;
 use core::marker::PhantomData;
 use core::pin::Pin;
@@ -12,6 +11,7 @@ use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 use crate::actor::Actor;
 use crate::context::{ContextMessage, InstantMessage};
 use crate::error::ActixSendError;
+use crate::object::AnyObjectContainer;
 use crate::sender::WeakSender;
 use crate::util::runtime;
 
@@ -69,7 +69,7 @@ pub(crate) trait SubscribeTrait {
     fn send(
         &self,
         // Input message type have to be boxed too.
-        msg: MessageContainer,
+        msg: AnyObjectContainer,
         timeout: Duration,
     ) -> Pin<Box<dyn Future<Output = Option<Result<(), ActixSendError>>> + Send + '_>>;
 }
@@ -82,13 +82,13 @@ where
 {
     fn send(
         &self,
-        mut msg: MessageContainer,
+        mut msg: AnyObjectContainer,
         timeout: Duration,
     ) -> Pin<Box<dyn Future<Output = Option<Result<(), ActixSendError>>> + Send + '_>> {
         Box::pin(async move {
             // We downcast message trait object to the Message type of WeakSender.
 
-            let msg = msg.inner.as_any_mut().downcast_mut::<Option<M>>()?.take()?;
+            let msg = msg.unpack::<M>()?;
             let res = self._send(msg, timeout).await;
             Some(res)
         })
@@ -110,37 +110,5 @@ where
         runtime::timeout(timeout, f).await??;
 
         Ok(())
-    }
-}
-
-trait MessageTrait {
-    fn as_any_mut(&mut self) -> &mut dyn Any;
-}
-
-// a container for message trait object
-pub(crate) struct MessageContainer {
-    inner: Box<dyn MessageTrait + Send>,
-}
-
-// pack message type into trait object
-impl MessageContainer {
-    pub(crate) fn pack<M>(msg: M) -> Self
-    where
-        M: Send + 'static,
-    {
-        Self {
-            inner: Box::new(Some(msg)),
-        }
-    }
-}
-
-// impl Message trait for Option<MessageType>.
-impl<M> MessageTrait for Option<M>
-where
-    M: Send + 'static,
-{
-    // cast self to any so we can downcast it to a concrete type.
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
     }
 }

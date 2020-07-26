@@ -3,6 +3,7 @@
     We can register multiple async closure with different return types to one actor.
 */
 
+use core::any::Any;
 use core::future::Future;
 use core::marker::PhantomData;
 use core::pin::Pin;
@@ -27,8 +28,8 @@ macro_rules! object {
             pub(crate) fn handle<'a>(
                 &'a mut self,
                 act: &'a mut A,
-            ) -> Pin<Box<dyn Future<Output = FutureResultObjectContainer> $( + $send)* + 'a>> {
-                self.func.as_mut().handle(act)
+            ) -> Pin<Box<dyn Future<Output = AnyObjectContainer> $( + $send)* + 'a>> {
+                self.func.handle(act)
             }
         }
 
@@ -42,7 +43,7 @@ macro_rules! object {
             fn handle<'a>(
                 &'a mut self,
                 act: &'a mut A,
-            ) -> Pin<Box<dyn Future<Output = FutureResultObjectContainer> $( + $send)* + 'a>>;
+            ) -> Pin<Box<dyn Future<Output = AnyObjectContainer> $( + $send)* + 'a>>;
         }
 
         // The type we want to implement FutureTrait.
@@ -78,11 +79,11 @@ macro_rules! object {
             fn handle<'a>(
                 &'a mut self,
                 act: &'a mut A,
-            ) -> Pin<Box<dyn Future<Output = FutureResultObjectContainer> $( + $send)* + 'a>> {
+            ) -> Pin<Box<dyn Future<Output = AnyObjectContainer> $( + $send)* + 'a>> {
                 let fut = (&mut self.0)(act);
                 Box::pin(async move {
                     let r = fut.await;
-                    FutureResultObjectContainer::pack(r)
+                    AnyObjectContainer::pack(r)
                 })
             }
         }
@@ -95,18 +96,18 @@ object!(Send);
 #[cfg(feature = "actix-runtime")]
 object!();
 
-// A type contain the result trait object.
-pub(crate) struct FutureResultObjectContainer {
-    result: Box<dyn FutureResultTrait + Send>,
+// A containner type for packing and unpacking a type to/from a Any trait object
+pub(crate) struct AnyObjectContainer {
+    inner: Box<dyn Any + Send>,
 }
 
-impl FutureResultObjectContainer {
-    fn pack<R>(r: R) -> Self
+impl AnyObjectContainer {
+    pub(crate) fn pack<R>(r: R) -> Self
     where
         R: Send + 'static,
     {
         Self {
-            result: Box::new(Some(r)),
+            inner: Box::new(Some(r)),
         }
     }
 
@@ -115,22 +116,6 @@ impl FutureResultObjectContainer {
     where
         R: 'static,
     {
-        self.result.as_any_mut().downcast_mut::<Option<R>>()?.take()
-    }
-}
-
-// We have to map our trait object into Any in order to downcast it.
-trait FutureResultTrait {
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
-}
-
-// We impl FutureResultTrait for Option<R> instead of R because we want to take the inner data out.
-// Otherwise we would only have a &mut R.
-impl<R> FutureResultTrait for Option<R>
-where
-    R: Send + 'static,
-{
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
+        self.inner.downcast_mut::<Option<R>>()?.take()
     }
 }

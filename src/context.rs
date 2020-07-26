@@ -6,7 +6,7 @@ use futures_util::StreamExt;
 use tokio::sync::oneshot::Sender as OneshotSender;
 
 use crate::actor::{Actor, ActorState, Handler};
-use crate::object::{FutureObjectContainer, FutureResultObjectContainer};
+use crate::object::{AnyObjectContainer, FutureObjectContainer};
 use crate::sender::WeakSender;
 use crate::util::future_handle::{spawn_cancelable, FutureHandler};
 use crate::util::runtime;
@@ -248,17 +248,19 @@ where
     Remove(usize),
 }
 
+// variants of instant request
 pub(crate) enum InstantMessage<A>
 where
     A: Actor,
 {
     Static(Option<OneshotSender<A::Result>>, A::Message),
     Dynamic(
-        Option<OneshotSender<FutureResultObjectContainer>>,
+        Option<OneshotSender<AnyObjectContainer>>,
         FutureObjectContainer<A>,
     ),
 }
 
+// variants of delayed request
 pub(crate) enum DelayedMessage<A>
 where
     A: Actor,

@@ -13,10 +13,10 @@ use crate::context::{
     ActorContextState, ContextMessage, DelayedMessage, InstantMessage, IntervalMessage,
 };
 use crate::error::ActixSendError;
-use crate::object::FutureResultObjectContainer;
+use crate::object::AnyObjectContainer;
 use crate::sender::{GroupSender, Sender, WeakGroupSender, WeakSender};
 use crate::stream::ActorStream;
-use crate::subscribe::{MessageContainer, Subscribe};
+use crate::subscribe::Subscribe;
 use crate::util::{future_handle::FutureHandler, runtime};
 
 // A channel sender for communicating with actor(s).
@@ -36,7 +36,7 @@ where
     A: Actor,
 {
     fn clone(&self) -> Self {
-        self.strong_count.fetch_add(1, Ordering::Release);
+        self.strong_count.fetch_add(1, Ordering::Relaxed);
         Self {
             strong_count: self.strong_count.clone(),
             tx: self.tx.clone(),
@@ -52,7 +52,7 @@ where
     A: Actor,
 {
     fn drop(&mut self) {
-        if self.strong_count.fetch_sub(1, Ordering::Release) == 1 {
+        if self.strong_count.fetch_sub(1, Ordering::Acquire) == 1 {
             self.state.shutdown();
         }
     }
@@ -252,7 +252,7 @@ where
                 let msg = msg.clone();
                 let timeout = self.state.timeout();
 
-                let f = sub.send(MessageContainer::pack(msg), timeout);
+                let f = sub.send(AnyObjectContainer::pack(msg), timeout);
 
                 fut.push(f);
 
@@ -295,7 +295,7 @@ macro_rules! address_run {
                 F: FnMut(&mut A) -> Pin<Box<dyn Future<Output = R> $( + $send)* + '_>> + Send + 'static,
                 R: Send + 'static,
             {
-                let (tx, rx) = channel::<FutureResultObjectContainer>();
+                let (tx, rx) = channel::<AnyObjectContainer>();
 
                 let object = crate::object::FutureObject(f, PhantomData, PhantomData).pack();
 
@@ -385,17 +385,18 @@ impl<A> WeakAddress<A>
 where
     A: Actor,
 {
-    pub fn upgrade(self) -> Option<Address<A>> {
+    pub fn upgrade(&self) -> Option<Address<A>> {
         self.tx.upgrade().map(|sender| {
             self.strong_count.fetch_add(1, Ordering::SeqCst);
             Address {
-                strong_count: self.strong_count,
+                strong_count: self.strong_count.clone(),
                 tx: sender,
                 tx_subs: self
                     .tx_subs
+                    .as_ref()
                     .map(|sub| sub.upgrade().expect("Failed to upgrade WeakGroupSender")),
                 subs: None,
-                state: self.state,
+                state: self.state.clone(),
             }
         })
     }
