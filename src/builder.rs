@@ -24,18 +24,30 @@ pub struct BuilderFnContainer<A> {
 }
 
 impl<A> BuilderFnContainer<A> {
-    pub(crate) fn new<F, Fut>(f: F) -> Self
-    where
-        F: Fn() -> Fut + Send + 'static,
-        Fut: Future<Output = A> + Send + 'static,
-    {
-        Self { inner: Box::new(f) }
-    }
-
     async fn build(&self) -> A {
         self.inner.as_ref().build().await
     }
 }
+
+macro_rules! builder_impl {
+    ($($send:ident)*) => {
+            impl<A> BuilderFnContainer<A> {
+            pub(crate) fn new<F, Fut>(f: F) -> Self
+            where
+                F: Fn() -> Fut $( + $send)* + 'static,
+                Fut: Future<Output = A> $( + $send)* + 'static,
+            {
+                Self { inner: Box::new(f) }
+            }
+        }
+    }
+}
+
+#[cfg(not(feature = "actix-runtime-local"))]
+builder_impl!(Send);
+
+#[cfg(feature = "actix-runtime-local")]
+builder_impl!();
 
 // A trait would call build method on our actor builder function
 pub trait BuilderFnTrait<A> {

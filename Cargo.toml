@@ -56,6 +56,7 @@ default = ["tokio-runtime"]
 tokio-runtime = ["tokio/rt-threaded", "tokio/sync", "tokio/time"]
 async-std-runtime = ["async-std", "smol", "tokio/sync"]
 actix-runtime = ["actix-rt", "tokio/sync"]
+actix-runtime-local = ["actix-rt", "tokio/sync"]
 
 [dependencies]
 actix_send_macros = { path = "./actix-send-macros" }

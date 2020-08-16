@@ -10,13 +10,23 @@ use core::pin::Pin;
 
 use crate::actor::Actor;
 
-// a container for FutureTrait object
-pub(crate) struct FutureObjectContainer<A>
-where
-    A: Actor,
-{
-    func: Box<dyn FutureTrait<A> + Send>,
+macro_rules! object_container {
+    ($($send:ident)*) => {
+        // a container for FutureTrait object
+        pub(crate) struct FutureObjectContainer<A>
+        where
+            A: Actor,
+        {
+            func: Box<dyn FutureTrait<A> $( + $send)*>,
+        }
+    }
 }
+
+#[cfg(not(feature = "actix-runtime-local"))]
+object_container!(Send);
+
+#[cfg(feature = "actix-runtime-local")]
+object_container!();
 
 macro_rules! object {
     ($($send:ident)*) => {
@@ -90,10 +100,10 @@ macro_rules! object {
     };
 }
 
-#[cfg(not(feature = "actix-runtime"))]
+#[cfg(not(any(feature = "actix-runtime", feature = "actix-runtime-local")))]
 object!(Send);
 
-#[cfg(feature = "actix-runtime")]
+#[cfg(any(feature = "actix-runtime", feature = "actix-runtime-local"))]
 object!();
 
 // A containner type for packing and unpacking a type to/from a Any trait object

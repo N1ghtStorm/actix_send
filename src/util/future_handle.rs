@@ -18,7 +18,7 @@ macro_rules! spawn_cancel {
         where
             A: Actor,
             F: Future + Unpin $( + $send)* + 'static,
-            <F as Future>::Output: Send,
+            <F as Future>::Output: $($send)*,
             FN: FnOnce(Either<((), F), (<F as Future>::Output, FinisherFuture)>) -> Fut
                 $( + $send)*
                 + 'static,
@@ -46,10 +46,10 @@ macro_rules! spawn_cancel {
     };
 }
 
-#[cfg(not(feature = "actix-runtime"))]
+#[cfg(not(any(feature = "actix-runtime", feature = "actix-runtime-local")))]
 spawn_cancel!(Send);
 
-#[cfg(feature = "actix-runtime")]
+#[cfg(any(feature = "actix-runtime", feature = "actix-runtime-local"))]
 spawn_cancel!();
 
 // a future notified and polled by future_handler.

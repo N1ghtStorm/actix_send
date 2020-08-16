@@ -1,3 +1,4 @@
+use quote::quote;
 use syn::{
     export::Span, punctuated::Punctuated, token::Paren, AngleBracketedGenericArguments, Arm, Block,
     Expr, ExprAsync, ExprAwait, ExprBlock, ExprCall, ExprClosure, ExprMacro, ExprMatch, ExprPath,
@@ -565,7 +566,11 @@ impl<'a> ActorInfo<'a> {
 
     // We generate a real handle method for ActorMessage enum and pattern match the handle async functions.
     // The return type of this handle method would be ActorMessageResult enum.
-    pub(crate) fn handler_trait(&mut self, handle_info: &[HandleMethodInfo]) -> &mut Self {
+    pub(crate) fn handler_trait(
+        &mut self,
+        handle_info: &[HandleMethodInfo],
+        no_send: bool,
+    ) -> &mut Self {
         let actor_ident = self.ident;
 
         let message_enum_type = self.message_enum_type.clone();
@@ -759,8 +764,17 @@ impl<'a> ActorInfo<'a> {
             })
             .collect();
 
+        let attrs = if no_send {
+            let mut attr = attr_from_ident_str(vec!["handler"]);
+            let tokens = quote! { (no_send) };
+            attr.tokens = tokens;
+            vec![attr]
+        } else {
+            vec![attr_from_ident_str(vec!["handler"])]
+        };
+
         let handle = Item::Impl(ItemImpl {
-            attrs: vec![attr_from_ident_str(vec!["handler"])],
+            attrs,
             defaultness: None,
             unsafety: None,
             impl_token: Default::default(),

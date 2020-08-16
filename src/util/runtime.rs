@@ -76,7 +76,7 @@ runtime_impl!(
     Send
 );
 
-#[cfg(feature = "actix-runtime")]
+#[cfg(any(feature = "actix-runtime", feature = "actix-runtime-local"))]
 #[cfg(not(any(feature = "tokio-runtime", feature = "async-std-runtime")))]
 runtime_impl!(
     actix_rt::spawn,
@@ -108,7 +108,7 @@ where
         Ok(async_std::task::spawn_blocking(f).await)
     }
 
-    #[cfg(feature = "actix-runtime")]
+    #[cfg(any(feature = "actix-runtime", feature = "actix-runtime-local"))]
     #[cfg(not(any(feature = "async-std-runtime", feature = "tokio-runtime")))]
     panic!("spawn_blocking does not work for actix-runtime.\r\nPlease use web::block directly in your handle method");
 }

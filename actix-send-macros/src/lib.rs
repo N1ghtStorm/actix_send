@@ -27,7 +27,7 @@ pub fn actor(meta: TokenStream, input: TokenStream) -> TokenStream {
     match item {
         Item::Struct(struct_item) => {
             // check if #[actor(no_static)] attr is presented
-            let is_dynamic = args
+            let no_static = args
                 .iter()
                 .filter_map(|nest| {
                     if let NestedMeta::Meta(Meta::Path(Path { segments, .. })) = nest {
@@ -44,6 +44,24 @@ pub fn actor(meta: TokenStream, input: TokenStream) -> TokenStream {
                 .find(|bool| *bool)
                 .unwrap_or(false);
 
+            // check if #[actor(no_send)] attr is presented
+            let no_send = args
+                .iter()
+                .filter_map(|nest| {
+                    if let NestedMeta::Meta(Meta::Path(Path { segments, .. })) = nest {
+                        return Some(segments);
+                    }
+
+                    None
+                })
+                .map(|segments| {
+                    segments
+                        .iter()
+                        .any(|seg| seg.ident.to_string().as_str() == "no_send")
+                })
+                .find(|bool| *bool)
+                .unwrap_or(false);
+
             let actor_info = ActorInfo::new(&struct_item.ident);
 
             let actor_ident = actor_info.ident;
@@ -52,7 +70,7 @@ pub fn actor(meta: TokenStream, input: TokenStream) -> TokenStream {
 
             let (impl_gen, impl_ty, impl_where) = struct_item.generics.split_for_impl();
 
-            let expand = if is_dynamic {
+            let expand = if no_static {
                 let attr = attr_from_ident_str(vec!["actix_send", "prelude", "async_trait"]);
 
                 // impl dummy Message/Result type and dummy handler trait if we are a dynamic only
@@ -76,6 +94,29 @@ pub fn actor(meta: TokenStream, input: TokenStream) -> TokenStream {
                         }
                     }
                 }
+            } else if no_send {
+                quote! {
+                    #struct_item
+
+                    impl #impl_gen Actor for #actor_ident #impl_ty
+                    #impl_where
+                    {
+                        type Message = #message_enum_ident;
+                        type Result = #result_enum_ident;
+
+                        fn on_start(&mut self) -> core::pin::Pin<Box<dyn core::future::Future<Output = ()> + '_>> {
+                            Box::pin(async move {
+                                self.__on_start().await;
+                            })
+                        }
+
+                        fn on_stop(&mut self) -> core::pin::Pin<Box<dyn core::future::Future<Output = ()> + '_>> {
+                            Box::pin(async move {
+                                self.__on_stop().await;
+                            })
+                        }
+                    }
+                }
             } else {
                 quote! {
                     #struct_item
@@ -86,7 +127,7 @@ pub fn actor(meta: TokenStream, input: TokenStream) -> TokenStream {
                         type Message = #message_enum_ident;
                         type Result = #result_enum_ident;
 
-                        fn on_start(&mut self) -> core::pin::Pin<Box<dyn core::future::Future<Output = ()>  + Send + '_>> {
+                        fn on_start(&mut self) -> core::pin::Pin<Box<dyn core::future::Future<Output = ()> + Send + '_>> {
                             Box::pin(async move {
                                 self.__on_start().await;
                             })
@@ -110,13 +151,40 @@ pub fn actor(meta: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
-pub fn handler(_meta: TokenStream, input: TokenStream) -> TokenStream {
+pub fn handler(meta: TokenStream, input: TokenStream) -> TokenStream {
     let item = syn::parse_macro_input!(input as Item);
+
+    let args = syn::parse_macro_input!(meta as AttributeArgs);
+
+    // check if #[handler(no_send)] attr is presented
+    let no_send = args
+        .iter()
+        .filter_map(|nest| {
+            if let NestedMeta::Meta(Meta::Path(Path { segments, .. })) = nest {
+                return Some(segments);
+            }
+
+            None
+        })
+        .map(|segments| {
+            segments
+                .iter()
+                .any(|seg| seg.ident.to_string().as_str() == "no_send")
+        })
+        .find(|bool| *bool)
+        .unwrap_or(false);
 
     match item {
         Item::Impl(mut impl_item) => {
             // add async_trait attribute if not presented.
-            let async_trait_attr = attr_from_ident_str(vec!["async_trait"]);
+
+            let async_trait_attr = if no_send {
+                let mut attr = attr_from_ident_str(vec!["async_trait"]);
+                attr.tokens = quote! { (?Send) };
+                attr
+            } else {
+                attr_from_ident_str(vec!["async_trait"])
+            };
 
             if !impl_item.attrs.contains(&async_trait_attr) {
                 impl_item.attrs.push(async_trait_attr);
@@ -1005,8 +1073,27 @@ pub fn actor_mod(_meta: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
-pub fn handler_v2(_meta: TokenStream, input: TokenStream) -> TokenStream {
+pub fn handler_v2(meta: TokenStream, input: TokenStream) -> TokenStream {
     let item = syn::parse_macro_input!(input as Item);
+    let args = syn::parse_macro_input!(meta as AttributeArgs);
+
+    // check if #[handler(no_send)] attr is presented
+    let no_send = args
+        .iter()
+        .filter_map(|nest| {
+            if let NestedMeta::Meta(Meta::Path(Path { segments, .. })) = nest {
+                return Some(segments);
+            }
+
+            None
+        })
+        .map(|segments| {
+            segments
+                .iter()
+                .any(|seg| seg.ident.to_string().as_str() == "no_send")
+        })
+        .find(|bool| *bool)
+        .unwrap_or(false);
 
     match item {
         Item::Impl(mut impl_item) => {
@@ -1128,7 +1215,7 @@ pub fn handler_v2(_meta: TokenStream, input: TokenStream) -> TokenStream {
                 .enum_variants(&handle_info)
                 .from_trait(&handle_info)
                 .map_result_trait(&handle_info)
-                .handler_trait(&handle_info);
+                .handler_trait(&handle_info, no_send);
             // .send_method_wrapper(&handle_info);
 
             let message_enum = &actor_info.message_enum;

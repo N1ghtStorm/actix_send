@@ -7,6 +7,9 @@ use {
     When enabling actix-runtime we have more freedom in our handle methods at the exchange of a
     single threaded runtime.
 
+    The actor's address can still be sent between threads and actor can handle messages from other
+    threads.
+
     By default we don't enable actix runtime. Please run this example with:
 
     cargo run --example actix --no-default-features --features actix-runtime

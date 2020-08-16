@@ -11,43 +11,52 @@ use crate::builder::{Builder, BuilderFnContainer, Config};
 use crate::interval::IntervalFutureSet;
 use crate::util::future_handle::FutureHandler;
 
-pub trait Actor
-where
-    Self: Sized + Send,
-{
-    type Message: Send;
-    type Result: Send;
+macro_rules! actor {
+    ($($send:ident)*) => {
+        pub trait Actor
+        where
+            Self: Sized $( + $send)*,
+        {
+            type Message: $($send)*;
+            type Result: $($send)*;
 
-    /// define a new builder for an new set of actor(s) with the async closure.
-    fn builder<F, Fut>(f: F) -> Builder<Self>
-    where
-        F: Fn() -> Fut + Send + 'static,
-        Fut: Future<Output = Self> + Send + 'static,
-    {
-        Builder {
-            actor_builder: BuilderFnContainer::new(f),
-            config: Default::default(),
+            /// define a new builder for an new set of actor(s) with the async closure.
+            fn builder<F, Fut>(f: F) -> Builder<Self>
+            where
+                F: Fn() -> Fut $( + $send)* + 'static,
+                Fut: Future<Output = Self> $( + $send)* + 'static,
+            {
+                Builder {
+                    actor_builder: BuilderFnContainer::new(f),
+                    config: Default::default(),
+                }
+            }
+
+            /// Called when actor starts.
+            ///
+            /// *. This would apply to every single instance of actor(s)
+            ///
+            /// *. This would apply to restart process if `Builder::restart_on_err` is set to true
+            #[allow(unused_variables)]
+            fn on_start(&mut self) -> Pin<Box<dyn Future<Output = ()> $( + $send)* + '_>> {
+                Box::pin(async {})
+            }
+
+            /// Called before actor stop. Actor's context would be passed as argument.
+            ///
+            /// *. This would apply to every single instance of actor(s)
+            #[allow(unused_variables)]
+            fn on_stop(&mut self) -> Pin<Box<dyn Future<Output = ()> $( + $send)* + '_>> {
+                Box::pin(async {})
+            }
         }
     }
-
-    /// Called when actor starts.
-    ///
-    /// *. This would apply to every single instance of actor(s)
-    ///
-    /// *. This would apply to restart process if `Builder::restart_on_err` is set to true
-    #[allow(unused_variables)]
-    fn on_start(&mut self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        Box::pin(async {})
-    }
-
-    /// Called before actor stop. Actor's context would be passed as argument.
-    ///
-    /// *. This would apply to every single instance of actor(s)
-    #[allow(unused_variables)]
-    fn on_stop(&mut self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
-        Box::pin(async {})
-    }
 }
+
+#[cfg(not(feature = "actix-runtime-local"))]
+actor!(Send);
+#[cfg(feature = "actix-runtime-local")]
+actor!();
 
 // a marker bit for lower bit of usize. can be used to notify if address is dropping.
 const MARKER: usize = 1;
@@ -175,7 +184,17 @@ where
     }
 }
 
+#[cfg(not(feature = "actix-runtime-local"))]
 #[async_trait]
+pub trait Handler
+where
+    Self: Actor,
+{
+    async fn handle(&mut self, msg: Self::Message) -> Self::Result;
+}
+
+#[cfg(feature = "actix-runtime-local")]
+#[async_trait(?Send)]
 pub trait Handler
 where
     Self: Actor,

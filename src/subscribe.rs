@@ -17,9 +17,57 @@ use crate::util::runtime;
 
 // subscribe hold a vector of trait objects which are boxed Subscriber that contains
 // Sender<ContextMessage<Actor>> and an associate message type.
-pub(crate) struct Subscribe {
-    inner: Arc<AsyncMutex<Vec<Box<dyn SubscribeTrait + Send>>>>,
+macro_rules! subscribe {
+    ($($send:ident)*) => {
+        pub(crate) struct Subscribe {
+            inner: Arc<AsyncMutex<Vec<Box<dyn SubscribeTrait $( + $send)*>>>>,
+        }
+
+        impl Subscribe {
+            pub(crate) async fn lock(&self) -> AsyncMutexGuard<'_, Vec<Box<dyn SubscribeTrait $( + $send)*>>> {
+                self.inner.lock().await
+            }
+        }
+
+        // we make Subscriber to trait object so they are not bound to Actor and Message Type.
+        #[allow(clippy::type_complexity)]
+        pub(crate) trait SubscribeTrait {
+            fn send(
+                &self,
+                // Input message type have to be boxed too.
+                msg: AnyObjectContainer,
+                timeout: Duration,
+            ) -> Pin<Box<dyn Future<Output = Option<Result<(), ActixSendError>>> $( + $send)* + '_>>;
+        }
+
+        #[allow(clippy::type_complexity)]
+        impl<A, M> SubscribeTrait for Subscriber<A, M>
+        where
+            A: Actor + 'static,
+            M: Send + Into<A::Message> + 'static,
+        {
+            fn send(
+                &self,
+                mut msg: AnyObjectContainer,
+                timeout: Duration,
+            ) -> Pin<Box<dyn Future<Output = Option<Result<(), ActixSendError>>> $( + $send)* + '_>> {
+                Box::pin(async move {
+                    // We downcast message trait object to the Message type of WeakSender.
+
+                    let msg = msg.unpack::<M>()?;
+                    let res = self._send(msg, timeout).await;
+                    Some(res)
+                })
+            }
+        }
+    }
 }
+
+#[cfg(not(feature = "actix-runtime-local"))]
+subscribe!(Send);
+
+#[cfg(feature = "actix-runtime-local")]
+subscribe!();
 
 impl Default for Subscribe {
     fn default() -> Self {
@@ -48,10 +96,6 @@ impl Subscribe {
             _message: PhantomData::<JoinHandle<M>>,
         }));
     }
-
-    pub(crate) async fn lock(&self) -> AsyncMutexGuard<'_, Vec<Box<dyn SubscribeTrait + Send>>> {
-        self.inner.lock().await
-    }
 }
 
 struct Subscriber<A, M>
@@ -61,38 +105,6 @@ where
 {
     sender: WeakSender<ContextMessage<A>>,
     _message: PhantomData<JoinHandle<M>>,
-}
-
-// we make Subscriber to trait object so they are not bound to Actor and Message Type.
-#[allow(clippy::type_complexity)]
-pub(crate) trait SubscribeTrait {
-    fn send(
-        &self,
-        // Input message type have to be boxed too.
-        msg: AnyObjectContainer,
-        timeout: Duration,
-    ) -> Pin<Box<dyn Future<Output = Option<Result<(), ActixSendError>>> + Send + '_>>;
-}
-
-#[allow(clippy::type_complexity)]
-impl<A, M> SubscribeTrait for Subscriber<A, M>
-where
-    A: Actor + 'static,
-    M: Send + Into<A::Message> + 'static,
-{
-    fn send(
-        &self,
-        mut msg: AnyObjectContainer,
-        timeout: Duration,
-    ) -> Pin<Box<dyn Future<Output = Option<Result<(), ActixSendError>>> + Send + '_>> {
-        Box::pin(async move {
-            // We downcast message trait object to the Message type of WeakSender.
-
-            let msg = msg.unpack::<M>()?;
-            let res = self._send(msg, timeout).await;
-            Some(res)
-        })
-    }
 }
 
 impl<A, M> Subscriber<A, M>

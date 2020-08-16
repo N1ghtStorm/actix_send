@@ -31,26 +31,36 @@ impl<M> From<AsyncChannelSender<M>> for Sender<M> {
     }
 }
 
-impl<M> Sender<M>
-where
-    M: Send,
-{
-    pub(crate) fn downgrade(&self) -> WeakSender<M> {
-        WeakSender {
-            inner: Arc::downgrade(&self.inner),
+macro_rules! sender {
+    ($($send:ident)*) => {
+        impl<M> Sender<M>
+        where
+            M: 'static $( + $send)*,
+        {
+            pub(crate) fn downgrade(&self) -> WeakSender<M> {
+                WeakSender {
+                    inner: Arc::downgrade(&self.inner),
+                }
+            }
+
+            pub(crate) async fn send(&self, msg: M) -> Result<(), SendError<M>> {
+                self.inner.send(msg).await
+            }
+
+            pub(crate) async fn send_timeout(&self, msg: M, dur: Duration) -> Result<(), ActixSendError> {
+                let fut = self.inner.send(msg);
+                runtime::timeout(dur, fut).await??;
+                Ok(())
+            }
         }
     }
-
-    pub(crate) async fn send(&self, msg: M) -> Result<(), SendError<M>> {
-        self.inner.send(msg).await
-    }
-
-    pub(crate) async fn send_timeout(&self, msg: M, dur: Duration) -> Result<(), ActixSendError> {
-        let fut = self.inner.send(msg);
-        runtime::timeout(dur, fut).await??;
-        Ok(())
-    }
 }
+
+#[cfg(not(feature = "actix-runtime-local"))]
+sender!(Send);
+
+#[cfg(feature = "actix-runtime-local")]
+sender!();
 
 pub struct WeakSender<M> {
     inner: Weak<async_channel::Sender<M>>,
