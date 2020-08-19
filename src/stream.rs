@@ -4,7 +4,7 @@ use core::task::{Context, Poll};
 
 use futures_util::stream::Stream;
 use pin_project::pin_project;
-use tokio::sync::oneshot::channel;
+use tokio::sync::oneshot::{channel, Receiver};
 
 use crate::actor::Actor;
 use crate::address::MapResult;
@@ -22,10 +22,7 @@ where
     #[pin]
     stream: S,
     tx: Sender<ContextMessage<A>>,
-    #[allow(clippy::type_complexity)]
-    pending_future: Option<
-        Pin<Box<dyn Future<Output = Result<<I as MapResult<A::Result>>::Output, ActixSendError>>>>,
-    >,
+    rx_one: Option<Receiver<A::Result>>,
 }
 
 impl<A, S, I> ActorStream<A, S, I>
@@ -38,7 +35,7 @@ where
         Self {
             stream,
             tx,
-            pending_future: None,
+            rx_one: None,
         }
     }
 }
@@ -54,13 +51,16 @@ where
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
 
-        // If we have a pending_future it means we are waiting for the last result of stream item.
-        if let Some(fut) = this.pending_future.as_mut() {
-            return match fut.as_mut().poll(cx) {
+        // if we have a one shot receiver then we are waiting for the last message result.
+        if let Some(ref mut rx) = this.rx_one.as_mut() {
+            return match Pin::new(rx).poll(cx) {
                 Poll::Pending => Poll::Pending,
                 Poll::Ready(res) => {
-                    *this.pending_future = None;
-                    Poll::Ready(Some(res))
+                    *this.rx_one = None;
+                    match res {
+                        Ok(res) => Poll::Ready(Some(I::map(res))),
+                        Err(e) => Poll::Ready(Some(Err(e.into()))),
+                    }
                 }
             };
         }
@@ -70,34 +70,24 @@ where
             Poll::Pending => Poll::Pending,
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Ready(Some(item)) => {
-                // ToDo: we make box and clone sender with every stream item for now which is not optimal.
-                let mut fut = Box::pin(send(this.tx.clone(), item));
+                let (tx, mut rx) = channel::<A::Result>();
+                let msg = ContextMessage::Instant(InstantMessage::Static(Some(tx), item.into()));
 
-                match fut.as_mut().poll(cx) {
+                if let Err(e) = this.tx.try_send(msg) {
+                    return Poll::Ready(Some(Err(e.into())));
+                }
+
+                match Pin::new(&mut rx).poll(cx) {
                     Poll::Pending => {
-                        *this.pending_future = Some(fut);
+                        *this.rx_one = Some(rx);
                         Poll::Pending
                     }
-                    Poll::Ready(res) => Poll::Ready(Some(res)),
+                    Poll::Ready(res) => match res {
+                        Ok(res) => Poll::Ready(Some(I::map(res))),
+                        Err(e) => Poll::Ready(Some(Err(e.into()))),
+                    },
                 }
             }
         }
     }
-}
-
-async fn send<A, I>(
-    sender: Sender<ContextMessage<A>>,
-    item: I,
-) -> Result<<I as MapResult<A::Result>>::Output, ActixSendError>
-where
-    A: Actor + 'static,
-    I: Into<A::Message> + MapResult<A::Result>,
-{
-    let (tx, rx) = channel::<A::Result>();
-
-    let msg = ContextMessage::Instant(InstantMessage::Static(Some(tx), item.into()));
-    sender.send(msg).await?;
-
-    let res = rx.await?;
-    I::map(res)
 }

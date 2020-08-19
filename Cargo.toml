@@ -60,19 +60,19 @@ actix-runtime-local = ["actix-rt", "tokio/sync"]
 
 [dependencies]
 actix_send_macros = { path = "./actix-send-macros" }
-async-channel = "1.1.0"
-async-trait = "0.1.36"
+async-channel = "1.4.0"
+async-trait = "0.1.38"
 futures-util = { version = "0.3.5", default-features = false }
-pin-project = "0.4.22"
+pin-project = "0.4.23"
 
 actix-rt = { version = "1.1.1", optional = true }
-async-std = { version = "1.6.2", optional = true, default-features = false }
+async-std = { version = "1.6.3", optional = true, default-features = false }
 smol = { version = "0.1.18", optional = true, default-features = false }
-tokio = { version = "0.2.21", optional = true, default-features = false }
+tokio = { version = "0.2.22", optional = true, default-features = false }
 
 [dev-dependencies]
 actix = "0.10.0-alpha.3"
 actix-rt = "1.1.1"
-async-std = { version = "1.6.2", features = ["attributes", "unstable"] }
-tokio = { version = "0.2.21", features = ["full"] }
+async-std = { version = "1.6.3", features = ["attributes", "unstable"] }
+tokio = { version = "0.2.22", features = ["full"] }
 num_cpus = ""

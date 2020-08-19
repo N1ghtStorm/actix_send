@@ -1,14 +1,13 @@
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use futures_util::future::Either;
 
 use crate::actor::Actor;
 use crate::context::{ContextMessage, IntervalMessage};
 use crate::sender::WeakSender;
-use crate::util::lock::SimpleSpinLock;
 use crate::util::runtime;
 
 macro_rules! spawn_cancel {
@@ -24,7 +23,7 @@ macro_rules! spawn_cancel {
                 + 'static,
             Fut: Future<Output = ()> $( + $send)*,
         {
-            let waker = Arc::new(SimpleSpinLock::new(None));
+            let waker = Arc::new(Mutex::new((false, None)));
 
             let finisher = FinisherFuture {
                 waker: waker.clone(),
@@ -54,7 +53,7 @@ spawn_cancel!();
 
 // a future notified and polled by future_handler.
 pub(crate) struct FinisherFuture {
-    waker: Arc<SimpleSpinLock<Option<Waker>>>,
+    waker: Arc<Mutex<(bool, Option<Waker>)>>,
 }
 
 impl Future for FinisherFuture {
@@ -64,10 +63,14 @@ impl Future for FinisherFuture {
         let this = self.get_mut();
 
         match this.waker.lock() {
-            None => Poll::Ready(()),
-            Some(mut guard) => {
-                *guard = Some(cx.waker().clone());
-                Poll::Pending
+            Err(_) => Poll::Ready(()),
+            Ok(mut guard) => {
+                if guard.0 {
+                    Poll::Ready(())
+                } else {
+                    guard.1 = Some(cx.waker().clone());
+                    Poll::Pending
+                }
             }
         }
     }
@@ -77,7 +80,7 @@ pub struct FutureHandler<A>
 where
     A: Actor,
 {
-    waker: Arc<SimpleSpinLock<Option<Waker>>>,
+    waker: Arc<Mutex<(bool, Option<Waker>)>>,
     tx: Option<(usize, WeakSender<ContextMessage<A>>)>,
 }
 
@@ -99,11 +102,11 @@ where
 {
     /// Cancel the future.
     pub fn cancel(&self) {
-        if let Some(mut guard) = self.waker.lock() {
-            let opt = guard.take();
+        if let Ok(mut guard) = self.waker.lock() {
+            guard.0 = true;
+            let opt = guard.1.take();
 
             drop(guard);
-            self.waker.close();
 
             if let Some(waker) = opt {
                 waker.wake();

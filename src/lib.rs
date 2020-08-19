@@ -130,6 +130,9 @@
 //! | `async-std-runtime` | Enable support for the `async-std` crate. | [async-std](https://crates.io/crates/async-std)<br>[tokio](https://crates.io/crates/tokio) with `sync` feature | no |
 //! | `actix-runtime` | Enable support for the `actix-rt` crate. | [actix-rt](https://crates.io/crates/actix-rt)<br>[tokio](https://crates.io/crates/tokio) with `sync` feature | no |
 
+#![forbid(unsafe_code)]
+#![deny(unused_variables)]
+
 pub(crate) mod actor;
 pub(crate) mod address;
 pub(crate) mod builder;

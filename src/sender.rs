@@ -1,7 +1,7 @@
 use core::time::Duration;
 use std::sync::{Arc, Weak};
 
-use async_channel::{SendError, Sender as AsyncChannelSender};
+use async_channel::{SendError, Sender as AsyncChannelSender, TrySendError};
 
 use crate::actor::Actor;
 use crate::context::ContextMessage;
@@ -45,6 +45,10 @@ macro_rules! sender {
 
             pub(crate) async fn send(&self, msg: M) -> Result<(), SendError<M>> {
                 self.inner.send(msg).await
+            }
+
+            pub(crate) fn try_send(&self, msg: M) -> Result<(), TrySendError<M>> {
+                self.inner.try_send(msg)
             }
 
             pub(crate) async fn send_timeout(&self, msg: M, dur: Duration) -> Result<(), ActixSendError> {
