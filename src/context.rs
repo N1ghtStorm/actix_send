@@ -1,15 +1,18 @@
 use core::fmt::{Debug, Formatter, Result as FmtResult};
 use core::time::Duration;
 
-use async_channel::Receiver;
 use futures_util::StreamExt;
-use tokio::sync::oneshot::Sender as OneshotSender;
 
 use crate::actor::{Actor, ActorState, Handler};
 use crate::object::{AnyObjectContainer, FutureObjectContainer};
+use crate::receiver::Receiver;
 use crate::sender::WeakSender;
-use crate::util::future_handle::{spawn_cancelable, FutureHandler};
-use crate::util::runtime;
+use crate::util::{
+    channel::OneShotSender,
+    future_handle::{spawn_cancelable, FutureHandler},
+    runtime,
+};
+use futures_util::stream::{select, Select};
 
 // ActorContext would hold actor instance local state and the actor itself.
 // State shared by actors are stored in ActorState.
@@ -20,12 +23,17 @@ where
     id: usize,
     generation: usize,
     tx: WeakSender<ContextMessage<A>>,
-    rx: Receiver<ContextMessage<A>>,
-    rx_sub: Option<Receiver<ContextMessage<A>>>,
+    rx: Option<Recv<A>>,
+    // When rx_sub is Some we take both rx and rx_sub and construct selector field.
+    rx_sub: Option<Recv<A>>,
+    // If selector is None then rx must be Some.
+    selector: Option<Select<Recv<A>, Recv<A>>>,
     manual_shutdown: bool,
     actor: A,
     state: ActorState<A>,
 }
+
+type Recv<A> = Receiver<ContextMessage<A>>;
 
 impl<A> ActorContext<A>
 where
@@ -43,8 +51,9 @@ where
             id,
             generation: 0,
             tx,
-            rx,
+            rx: Some(rx),
             rx_sub,
+            selector: None,
             manual_shutdown: false,
             actor,
             state,
@@ -160,15 +169,18 @@ where
     }
 
     pub(crate) fn spawn_loop(mut self) {
+        // this would only happen once.
+        if let Some(rx_sub) = self.rx_sub.take() {
+            self.selector = Some(select(self.rx.take().unwrap(), rx_sub));
+        }
+
         runtime::spawn(async {
             self.actor.on_start().await;
             self.state.inc_active();
 
-            match self.rx_sub.as_ref() {
-                Some(rx_sub) => {
-                    let mut select = futures_util::stream::select(self.rx.clone(), rx_sub.clone());
-
-                    while let Some(msg) = select.next().await {
+            match self.selector.is_some() {
+                true => {
+                    while let Some(msg) = self.selector.as_mut().unwrap().next().await {
                         let should_break = self.handle_msg(msg).await;
 
                         if should_break {
@@ -178,8 +190,8 @@ where
                         runtime::yield_now().await;
                     }
                 }
-                None => {
-                    while let Ok(msg) = self.rx.recv().await {
+                false => {
+                    while let Ok(msg) = self.rx.as_mut().unwrap().recv().await {
                         let should_break = self.handle_msg(msg).await;
 
                         if should_break {
@@ -228,7 +240,7 @@ pub(crate) enum ContextMessage<A>
 where
     A: Actor,
 {
-    ManualShutDown(OneshotSender<ActorContextState>),
+    ManualShutDown(OneShotSender<ActorContextState>),
     Instant(InstantMessage<A>),
     Delayed(DelayedMessage<A>),
     Interval(IntervalMessage<A>),
@@ -240,7 +252,7 @@ where
     A: Actor,
 {
     Register(
-        OneshotSender<FutureHandler<A>>,
+        OneShotSender<FutureHandler<A>>,
         FutureObjectContainer<A>,
         Duration,
     ),
@@ -253,9 +265,9 @@ pub(crate) enum InstantMessage<A>
 where
     A: Actor,
 {
-    Static(Option<OneshotSender<A::Result>>, A::Message),
+    Static(Option<OneShotSender<A::Result>>, A::Message),
     Dynamic(
-        Option<OneshotSender<AnyObjectContainer>>,
+        Option<OneShotSender<AnyObjectContainer>>,
         FutureObjectContainer<A>,
     ),
 }

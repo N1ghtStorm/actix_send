@@ -17,8 +17,15 @@ async fn main() {
     // by sending the stream to actor we can handle every stream item as a message
     // and return the result as a new stream
 
-    // since our mock stream produces String so we map the item from string to Message1
-    let mut new_stream = address.send_stream(stream.map(|from| Message1 { from }));
+    // impl From trait for auto converting stream item to a message type.
+    impl From<String> for Message1 {
+        fn from(from: String) -> Self {
+            Self { from }
+        }
+    }
+
+    // send the stream to actor.
+    let mut new_stream = address.send_stream::<_, _, Message1>(stream);
 
     let future1 = async move {
         // result here would be Result<MessageResult, ActixSendError>

@@ -12,71 +12,50 @@
 fn main() {
     #[cfg(feature = "actix-runtime-local")]
     fn _main() {
-        use std::cell::RefCell;
-        use std::rc::Rc;
-        use std::time::Duration;
+        use std::time::Instant;
 
         use actix_send::prelude::*;
+        use futures_util::stream::{FuturesUnordered, StreamExt};
+        use tokio::fs::File;
+        use tokio::io::AsyncReadExt;
 
-        //use no_send to notify the macro we want a !Send actor.
         #[actor(no_send)]
-        pub struct MyActor {
-            // Since the actor is runs on single thread. It can have state with !Send bound
-            pub state: Rc<String>,
+        pub struct ActixSendActor {
+            pub file: File,
         }
 
-        pub struct Message1;
+        pub struct Ping;
 
-        //use no_send to notify the macro the handler method can be !Send futures.
         #[handler_v2(no_send)]
-        impl MyActor {
-            async fn handle_msg1(&mut self, _: Message1) -> RefCell<u8> {
-                let mut cell = RefCell::new(123);
-
-                let _ = actix_rt::time::delay_for(Duration::from_millis(1)).await;
-
-                println!("refcell is: {:?}", &mut cell);
-
-                cell
+        impl ActixSendActor {
+            async fn handle(&mut self, _: Ping) -> u8 {
+                let mut buffer = [0u8; 1_000];
+                let _ = self.file.read(&mut buffer).await.unwrap();
+                1
             }
         }
 
         actix_rt::System::new("actix-test").block_on(async {
-            let builder = MyActor::builder(|| async {
-                let state = Rc::new(String::from("running"));
-                MyActor { state }
+            let builder = ActixSendActor::builder(move || async move {
+                let file = File::open("./sample/sample.txt").await.unwrap();
+                ActixSendActor { file }
             });
 
             let address = builder.start().await;
 
-            let res = address.send(Message1).await.unwrap();
+            println!("starting benchmark actix_send");
 
-            println!("We got result for Message1\r\nResult is: {:?}\r\n", res);
+            let join = (0..10000).fold(FuturesUnordered::new(), |f, _| {
+                f.push(address.send(Ping));
+                f
+            });
 
-            let handler = address
-                .run_interval(Duration::from_secs(1), |_actor| {
-                    let rc = Rc::new(123);
-                    Box::pin(async move {
-                        let _ = actix_rt::time::delay_for(Duration::from_millis(1)).await;
-                        println!("Rc is: {}", &rc);
-                    })
-                })
-                .await
-                .unwrap();
-
-            let mut interval = actix_rt::time::interval(Duration::from_secs(1));
-
-            for i in 0..5 {
-                if i == 3 {
-                    // cancel the interval future after 3 seconds.
-                    handler.cancel();
-                    println!("interval future stopped");
-                }
-
-                interval.tick().await;
-            }
-
-            println!("example finish successfully");
+            let start = Instant::now();
+            let _ = join.collect::<Vec<_>>().await;
+            println!(
+                "total runtime is {:#?}",
+                Instant::now().duration_since(start)
+            );
         })
     }
 

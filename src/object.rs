@@ -106,7 +106,7 @@ object!(Send);
 #[cfg(any(feature = "actix-runtime", feature = "actix-runtime-local"))]
 object!();
 
-// A containner type for packing and unpacking a type to/from a Any trait object
+// A container type for packing and unpacking a type to/from a Any trait object
 pub(crate) struct AnyObjectContainer {
     inner: Box<dyn Any + Send>,
 }

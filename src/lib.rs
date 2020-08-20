@@ -140,6 +140,7 @@ pub(crate) mod context;
 pub(crate) mod error;
 pub(crate) mod interval;
 pub(crate) mod object;
+pub(crate) mod receiver;
 pub(crate) mod sender;
 pub(crate) mod stream;
 pub(crate) mod subscribe;

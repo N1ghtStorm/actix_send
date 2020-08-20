@@ -2,12 +2,12 @@ use core::future::Future;
 use core::pin::Pin;
 use core::time::Duration;
 
-use async_channel::{bounded, unbounded};
-
 use crate::actor::{Actor, ActorState, Handler};
 use crate::address::Address;
 use crate::context::{ActorContext, ContextMessage};
+use crate::receiver::Receiver;
 use crate::sender::Sender;
+use crate::util::channel::{bounded, unbounded};
 
 pub struct Builder<A>
 where
@@ -143,10 +143,12 @@ where
     }
 
     /// Start actor(s) with the Builder settings.
+    #[cfg(not(feature = "actix-runtime-local"))]
     pub async fn start(self) -> Address<A> {
         let num = self.config.num;
 
         let (tx, rx) = unbounded::<ContextMessage<A>>();
+        let rx = Receiver::from(rx);
         let tx = Sender::from(tx);
 
         let state = ActorState::new(self.config);
@@ -159,16 +161,65 @@ where
                 true => {
                     let (tx_sub, rx_sub) = bounded::<ContextMessage<A>>(num);
 
-                    subs.push(tx_sub);
+                    subs.push(Sender::from(tx_sub));
 
                     Some(rx_sub)
                 }
                 false => None,
             };
 
-            ActorContext::new(i, tx.downgrade(), rx.clone(), rx_sub, actor, state.clone())
-                .spawn_loop();
+            ActorContext::new(
+                i,
+                tx.downgrade(),
+                rx.clone(),
+                rx_sub.map(Into::into),
+                actor,
+                state.clone(),
+            )
+            .spawn_loop();
         }
+
+        Address::new(tx, subs.into(), state)
+    }
+
+    #[cfg(feature = "actix-runtime-local")]
+    pub async fn start(self) -> Address<A> {
+        let num = self.config.num;
+
+        assert_eq!(
+            num, 1,
+            "It doesn't make sense to construct multiple instances of actor on single thread."
+        );
+
+        let (tx, rx) = unbounded::<ContextMessage<A>>();
+        let rx = Receiver::from(rx);
+        let tx = Sender::from(tx);
+
+        let state = ActorState::new(self.config);
+        let mut subs = Vec::with_capacity(num);
+
+        let actor = self.actor_builder.build().await;
+
+        let rx_sub = match state.allow_broadcast() {
+            true => {
+                let (tx_sub, rx_sub) = bounded::<ContextMessage<A>>(num);
+
+                subs.push(Sender::from(tx_sub));
+
+                Some(rx_sub)
+            }
+            false => None,
+        };
+
+        ActorContext::new(
+            0,
+            tx.downgrade(),
+            rx,
+            rx_sub.map(Into::into),
+            actor,
+            state.clone(),
+        )
+        .spawn_loop();
 
         Address::new(tx, subs.into(), state)
     }
@@ -181,6 +232,7 @@ where
         let num = self.config.num;
 
         let (tx, rx) = unbounded::<ContextMessage<A>>();
+        let rx = Receiver::from(rx);
         let tx = Sender::from(tx);
 
         let state = ActorState::new(self.config);
@@ -197,15 +249,21 @@ where
                 true => {
                     let (tx_sub, rx_sub) = bounded::<ContextMessage<A>>(num);
 
-                    subs.push(tx_sub);
+                    subs.push(Sender::from(tx_sub));
 
                     Some(rx_sub)
                 }
                 false => None,
             };
 
-            let ctx =
-                ActorContext::new(i, tx.downgrade(), rx.clone(), rx_sub, actor, state.clone());
+            let ctx = ActorContext::new(
+                i,
+                tx.downgrade(),
+                rx.clone().into(),
+                rx_sub.map(Into::into),
+                actor,
+                state.clone(),
+            );
 
             arbiters
                 .get(index)

@@ -1,18 +1,19 @@
 use core::time::Duration;
-use std::sync::{Arc, Weak};
-
-use async_channel::{SendError, Sender as AsyncChannelSender, TrySendError};
+#[cfg(feature = "actix-runtime-local")]
+use std::rc::{Rc as Wrapper, Weak as WeakWrapper};
+#[cfg(not(feature = "actix-runtime-local"))]
+use std::sync::{Arc as Wrapper, Weak as WeakWrapper};
 
 use crate::actor::Actor;
 use crate::context::ContextMessage;
 use crate::error::ActixSendError;
-use crate::util::runtime;
+use crate::util::channel::Sender as AsyncChannelSender;
 
-// A wrapper for async_channel::sender.
-// ToDo: remove this when we have a weak sender.
+// A wrapper for crate::util::channel::Sender so we have a unified abstraction for different
+// channels
 
 pub struct Sender<M> {
-    inner: Arc<AsyncChannelSender<M>>,
+    inner: Wrapper<AsyncChannelSender<M>>,
 }
 
 impl<M> Clone for Sender<M> {
@@ -26,48 +27,68 @@ impl<M> Clone for Sender<M> {
 impl<M> From<AsyncChannelSender<M>> for Sender<M> {
     fn from(sender: AsyncChannelSender<M>) -> Self {
         Self {
-            inner: Arc::new(sender),
+            inner: Wrapper::new(sender),
         }
     }
 }
 
-macro_rules! sender {
-    ($($send:ident)*) => {
-        impl<M> Sender<M>
-        where
-            M: 'static $( + $send)*,
-        {
-            pub(crate) fn downgrade(&self) -> WeakSender<M> {
-                WeakSender {
-                    inner: Arc::downgrade(&self.inner),
-                }
-            }
-
-            pub(crate) async fn send(&self, msg: M) -> Result<(), SendError<M>> {
-                self.inner.send(msg).await
-            }
-
-            pub(crate) fn try_send(&self, msg: M) -> Result<(), TrySendError<M>> {
-                self.inner.try_send(msg)
-            }
-
-            pub(crate) async fn send_timeout(&self, msg: M, dur: Duration) -> Result<(), ActixSendError> {
-                let fut = self.inner.send(msg);
-                runtime::timeout(dur, fut).await??;
-                Ok(())
-            }
+impl<M> Sender<M>
+where
+    M: 'static,
+{
+    pub(crate) fn downgrade(&self) -> WeakSender<M> {
+        WeakSender {
+            inner: Wrapper::downgrade(&self.inner),
         }
     }
 }
 
 #[cfg(not(feature = "actix-runtime-local"))]
-sender!(Send);
+impl<M> Sender<M>
+where
+    M: 'static,
+{
+    pub(crate) async fn send(&self, msg: M) -> Result<(), ActixSendError> {
+        self.inner
+            .send(msg)
+            .await
+            .map_err(|_| ActixSendError::Closed)
+    }
+
+    pub(crate) fn try_send(&self, msg: M) -> Result<(), ActixSendError> {
+        self.inner.try_send(msg).map_err(|_| ActixSendError::Closed)
+    }
+
+    pub(crate) async fn send_timeout(&self, msg: M, dur: Duration) -> Result<(), ActixSendError> {
+        let fut = self.inner.send(msg);
+        crate::util::runtime::timeout(dur, fut)
+            .await?
+            .map_err(|_| ActixSendError::Closed)?;
+        Ok(())
+    }
+}
 
 #[cfg(feature = "actix-runtime-local")]
-sender!();
+impl<M> Sender<M>
+where
+    M: 'static,
+{
+    pub(crate) async fn send(&self, msg: M) -> Result<(), ActixSendError> {
+        self.inner.send(msg).map_err(|_| ActixSendError::Closed)
+    }
+
+    pub(crate) fn try_send(&self, msg: M) -> Result<(), ActixSendError> {
+        self.inner.send(msg).map_err(|_| ActixSendError::Closed)
+    }
+
+    pub(crate) async fn send_timeout(&self, msg: M, dur: Duration) -> Result<(), ActixSendError> {
+        drop(dur);
+        self.send(msg).await
+    }
+}
 
 pub struct WeakSender<M> {
-    inner: Weak<async_channel::Sender<M>>,
+    inner: WeakWrapper<AsyncChannelSender<M>>,
 }
 
 impl<M> Clone for WeakSender<M> {
@@ -80,7 +101,7 @@ impl<M> Clone for WeakSender<M> {
 
 impl<M> WeakSender<M> {
     pub(crate) fn upgrade(&self) -> Option<Sender<M>> {
-        Weak::upgrade(&self.inner).map(|inner| Sender { inner })
+        WeakWrapper::upgrade(&self.inner).map(|inner| Sender { inner })
     }
 }
 
@@ -89,16 +110,16 @@ pub struct GroupSender<A>
 where
     A: Actor,
 {
-    inner: Arc<Vec<AsyncChannelSender<ContextMessage<A>>>>,
+    inner: Wrapper<Vec<Sender<ContextMessage<A>>>>,
 }
 
-impl<A> From<Vec<AsyncChannelSender<ContextMessage<A>>>> for GroupSender<A>
+impl<A> From<Vec<Sender<ContextMessage<A>>>> for GroupSender<A>
 where
     A: Actor,
 {
-    fn from(sender: Vec<AsyncChannelSender<ContextMessage<A>>>) -> Self {
+    fn from(sender: Vec<Sender<ContextMessage<A>>>) -> Self {
         Self {
-            inner: Arc::new(sender),
+            inner: Wrapper::new(sender),
         }
     }
 }
@@ -120,11 +141,11 @@ where
 {
     pub(crate) fn downgrade(&self) -> WeakGroupSender<A> {
         WeakGroupSender {
-            inner: Arc::downgrade(&self.inner),
+            inner: Wrapper::downgrade(&self.inner),
         }
     }
 
-    pub(crate) fn as_slice(&self) -> &[AsyncChannelSender<ContextMessage<A>>] {
+    pub(crate) fn as_slice(&self) -> &[Sender<ContextMessage<A>>] {
         self.inner.as_slice()
     }
 }
@@ -133,7 +154,7 @@ pub struct WeakGroupSender<A>
 where
     A: Actor,
 {
-    inner: Weak<Vec<AsyncChannelSender<ContextMessage<A>>>>,
+    inner: WeakWrapper<Vec<Sender<ContextMessage<A>>>>,
 }
 
 impl<A> Clone for WeakGroupSender<A>
@@ -152,6 +173,6 @@ where
     A: Actor,
 {
     pub(crate) fn upgrade(&self) -> Option<GroupSender<A>> {
-        Weak::upgrade(&self.inner).map(|inner| GroupSender { inner })
+        WeakWrapper::upgrade(&self.inner).map(|inner| GroupSender { inner })
     }
 }

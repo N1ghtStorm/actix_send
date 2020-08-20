@@ -1,8 +1,5 @@
 use core::fmt::{Debug, Display, Formatter, Result as FmtResult};
 
-use async_channel::{SendError, TrySendError};
-use tokio::sync::oneshot::error::RecvError;
-
 pub enum ActixSendError {
     Canceled,
     Closed,
@@ -50,24 +47,6 @@ impl Debug for ActixSendError {
 impl Display for ActixSendError {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(f, "({})", self)
-    }
-}
-
-impl From<RecvError> for ActixSendError {
-    fn from(_err: RecvError) -> Self {
-        ActixSendError::Canceled
-    }
-}
-
-impl<M> From<SendError<M>> for ActixSendError {
-    fn from(_err: SendError<M>) -> Self {
-        ActixSendError::Closed
-    }
-}
-
-impl<M> From<TrySendError<M>> for ActixSendError {
-    fn from(_err: TrySendError<M>) -> Self {
-        ActixSendError::Closed
     }
 }
 

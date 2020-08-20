@@ -5,8 +5,6 @@ use core::time::Duration;
 
 use std::sync::{Arc, Mutex};
 
-use async_trait::async_trait;
-
 use crate::builder::{Builder, BuilderFnContainer, Config};
 use crate::interval::IntervalFutureSet;
 use crate::util::future_handle::FutureHandler;
@@ -185,7 +183,7 @@ where
 }
 
 #[cfg(not(feature = "actix-runtime-local"))]
-#[async_trait]
+#[async_trait::async_trait]
 pub trait Handler
 where
     Self: Actor,
@@ -194,7 +192,7 @@ where
 }
 
 #[cfg(feature = "actix-runtime-local")]
-#[async_trait(?Send)]
+#[async_trait::async_trait(?Send)]
 pub trait Handler
 where
     Self: Actor,

@@ -43,7 +43,7 @@ macro_rules! runtime_impl {
 
         pub(crate) async fn timeout<Fut, R>(dur: Duration, fut: Fut) -> Result<R, ActixSendError>
         where
-            Fut: Future<Output=R> $( + $send)*,
+            Fut: Future<Output=R>,
         {
             $timeout_fn(dur, fut).await.map_err(|_|ActixSendError::Timeout)
         }

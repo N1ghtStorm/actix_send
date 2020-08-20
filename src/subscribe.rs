@@ -119,7 +119,9 @@ where
             msg.into(),
         )));
 
-        runtime::timeout(timeout, f).await??;
+        runtime::timeout(timeout, f)
+            .await?
+            .map_err(|_| ActixSendError::Closed)?;
 
         Ok(())
     }

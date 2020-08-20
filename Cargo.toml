@@ -56,7 +56,7 @@ default = ["tokio-runtime"]
 tokio-runtime = ["tokio/rt-threaded", "tokio/sync", "tokio/time"]
 async-std-runtime = ["async-std", "smol", "tokio/sync"]
 actix-runtime = ["actix-rt", "tokio/sync"]
-actix-runtime-local = ["actix-rt", "tokio/sync"]
+actix-runtime-local = ["actix-rt", "tokio/sync", "actix-utils"]
 
 [dependencies]
 actix_send_macros = { path = "./actix-send-macros" }
@@ -66,6 +66,7 @@ futures-util = { version = "0.3.5", default-features = false }
 pin-project = "0.4.23"
 
 actix-rt = { version = "1.1.1", optional = true }
+actix-utils = { version = "1.0.6", optional = true}
 async-std = { version = "1.6.3", optional = true, default-features = false }
 smol = { version = "0.1.18", optional = true, default-features = false }
 tokio = { version = "0.2.22", optional = true, default-features = false }

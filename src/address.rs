@@ -6,7 +6,6 @@ use core::time::Duration;
 use std::sync::Arc;
 
 use futures_util::stream::{FuturesUnordered, Stream, StreamExt};
-use tokio::sync::oneshot::channel;
 
 use crate::actor::{Actor, ActorState};
 use crate::context::{
@@ -17,7 +16,7 @@ use crate::object::AnyObjectContainer;
 use crate::sender::{GroupSender, Sender, WeakGroupSender, WeakSender};
 use crate::stream::ActorStream;
 use crate::subscribe::Subscribe;
-use crate::util::{future_handle::FutureHandler, runtime};
+use crate::util::{channel::oneshot_channel, future_handle::FutureHandler, runtime};
 
 // A channel sender for communicating with actor(s).
 pub struct Address<A>
@@ -128,13 +127,13 @@ where
     where
         M: Into<A::Message> + MapResult<A::Result>,
     {
-        let (tx, rx) = channel::<A::Result>();
+        let (tx, rx) = oneshot_channel();
 
         let msg = ContextMessage::Instant(InstantMessage::Static(Some(tx), msg.into()));
 
         self.send_timeout(msg).await?;
 
-        let res = rx.await?;
+        let res = rx.await.map_err(|_| ActixSendError::Canceled)?;
 
         M::map(res)
     }
@@ -166,10 +165,11 @@ where
     ///
     /// *. Item of the stream must be actor's message type.
     #[must_use = "futures do nothing unless you `.await` or poll them"]
-    pub fn send_stream<S, I>(&self, stream: S) -> ActorStream<A, S, I>
+    pub fn send_stream<S, I, M>(&self, stream: S) -> ActorStream<A, S, I, M>
     where
         S: Stream<Item = I>,
-        I: Into<A::Message> + MapResult<A::Result> + 'static,
+        I: Into<M>,
+        M: Into<A::Message> + MapResult<A::Result> + 'static,
     {
         ActorStream::new(stream, self.tx.clone())
     }
@@ -192,15 +192,17 @@ where
             .as_slice()
             .iter()
             .fold(FuturesUnordered::new(), |fut, sub| {
-                let (tx, rx) = channel::<A::Result>();
+                let (tx, rx) = oneshot_channel();
 
                 let msg =
                     ContextMessage::Instant(InstantMessage::Static(Some(tx), msg.clone().into()));
 
                 let f = async move {
                     let f = sub.send(msg);
-                    runtime::timeout(self.state.timeout(), f).await??;
-                    let rx = rx.await?;
+                    runtime::timeout(self.state.timeout(), f)
+                        .await?
+                        .map_err(|_| ActixSendError::Closed)?;
+                    let rx = rx.await.map_err(|_| ActixSendError::Canceled)?;
                     M::map(rx)
                 };
 
@@ -270,10 +272,10 @@ where
     /// Would a return a struct contains the closed context's state.
     #[must_use = "futures do nothing unless you `.await` or poll them"]
     pub async fn close_one(&self) -> Result<ActorContextState, ActixSendError> {
-        let (tx, rx) = channel();
+        let (tx, rx) = oneshot_channel();
         let msg = ContextMessage::ManualShutDown(tx);
         self.send_timeout(msg).await?;
-        Ok(rx.await?)
+        Ok(rx.await.map_err(|_| ActixSendError::Canceled)?)
     }
 }
 
@@ -295,7 +297,7 @@ macro_rules! address_run {
                 F: FnMut(&mut A) -> Pin<Box<dyn Future<Output = R> $( + $send)* + '_>> + Send + 'static,
                 R: Send + 'static,
             {
-                let (tx, rx) = channel::<AnyObjectContainer>();
+                let (tx, rx) = oneshot_channel();
 
                 let object = crate::object::FutureObject(f, PhantomData, PhantomData).pack();
 
@@ -303,7 +305,7 @@ macro_rules! address_run {
 
                 self.send_timeout(msg).await?;
 
-                rx.await?.unpack::<R>().ok_or(ActixSendError::TypeCast)
+                rx.await.map_err(|_| ActixSendError::Canceled)?.unpack::<R>().ok_or(ActixSendError::TypeCast)
             }
 
             /// Run a boxed future and ignore the result.
@@ -351,7 +353,7 @@ macro_rules! address_run {
             where
                 F: FnMut(&mut A) -> Pin<Box<dyn Future<Output = ()> $( + $send)* + '_>> + Send + 'static,
             {
-                let (tx, rx) = channel::<FutureHandler<A>>();
+                let (tx, rx) = oneshot_channel();
 
                 let object = crate::object::FutureObject(f, PhantomData, PhantomData).pack();
 
@@ -359,7 +361,7 @@ macro_rules! address_run {
 
                 self.send_timeout(msg).await?;
 
-                Ok(rx.await?)
+                Ok(rx.await.map_err(|_| ActixSendError::Canceled)?)
             }
         }
     };
