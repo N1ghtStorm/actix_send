@@ -1,14 +1,16 @@
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
-use std::sync::{Arc, Mutex};
 
 use futures_util::future::Either;
 
 use crate::actor::Actor;
 use crate::context::{ContextMessage, IntervalMessage};
 use crate::sender::WeakSender;
-use crate::util::runtime;
+use crate::util::{
+    runtime,
+    smart_pointer::{Lock, RefCounter},
+};
 
 macro_rules! spawn_cancel {
     ($($send:ident)*) => {
@@ -23,7 +25,7 @@ macro_rules! spawn_cancel {
                 + 'static,
             Fut: Future<Output = ()> $( + $send)*,
         {
-            let waker = Arc::new(Mutex::new((false, None)));
+            let waker = RefCounter::new(Lock::new((false, None)));
 
             let finisher = FinisherFuture {
                 waker: waker.clone(),
@@ -53,7 +55,7 @@ spawn_cancel!();
 
 // a future notified and polled by future_handler.
 pub(crate) struct FinisherFuture {
-    waker: Arc<Mutex<(bool, Option<Waker>)>>,
+    waker: RefCounter<Lock<(bool, Option<Waker>)>>,
 }
 
 impl Future for FinisherFuture {
@@ -62,16 +64,12 @@ impl Future for FinisherFuture {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
 
-        match this.waker.lock() {
-            Err(_) => Poll::Ready(()),
-            Ok(mut guard) => {
-                if guard.0 {
-                    Poll::Ready(())
-                } else {
-                    guard.1 = Some(cx.waker().clone());
-                    Poll::Pending
-                }
-            }
+        let mut guard = this.waker.lock();
+        if guard.0 {
+            Poll::Ready(())
+        } else {
+            guard.1 = Some(cx.waker().clone());
+            Poll::Pending
         }
     }
 }
@@ -80,7 +78,7 @@ pub struct FutureHandler<A>
 where
     A: Actor,
 {
-    waker: Arc<Mutex<(bool, Option<Waker>)>>,
+    waker: RefCounter<Lock<(bool, Option<Waker>)>>,
     tx: Option<(usize, WeakSender<ContextMessage<A>>)>,
 }
 
@@ -102,15 +100,14 @@ where
 {
     /// Cancel the future.
     pub fn cancel(&self) {
-        if let Ok(mut guard) = self.waker.lock() {
-            guard.0 = true;
-            let opt = guard.1.take();
+        let mut guard = self.waker.lock();
+        guard.0 = true;
+        let opt = guard.1.take();
 
-            drop(guard);
+        drop(guard);
 
-            if let Some(waker) = opt {
-                waker.wake();
-            }
+        if let Some(waker) = opt {
+            waker.wake();
         }
 
         // We remove the interval future with index as key.

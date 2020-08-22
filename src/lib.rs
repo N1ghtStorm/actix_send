@@ -2,7 +2,7 @@
 //!
 //! # Limitation:
 //!
-//! - Generics in actor and message are not handled properly by macros.
+//! - Generics in actor and message may not handled properly by macros.
 //!
 //! # Example:
 //! ```rust
@@ -54,7 +54,7 @@
 //!        send messages to actor.
 //!
 //!        No matter how we name the handle method for a give <MessageType> in impl MyActor
-//!        we can just call Address::send(<MessageType>).
+//!        we can just call Address::send(<MessageType>) and according handle method will be called.
 //!     */
 //!
 //!     let res1: Result<u8, ActixSendError> = address.send(Message1).await;
@@ -125,10 +125,11 @@
 //! # Features
 //! | Feature | Description | Extra dependencies | Default |
 //! | ------- | ----------- | ------------------ | ------- |
-//! | `default` | The same as `tokio-runtime` feature | [actix-send-macros](https://github.com/fakeshadow/actix_send)<br>[async-channel](https://crates.io/crates/async-channel)<br>[async-trait](https://crates.io/crates/async-trait)<br>[futures](https://crates.io/crates/futures)<br>[parking_lot](https://crates.io/crates/parking_lot)<br>[pin-project](https://crates.io/crates/pin-project) | yes |
-//! | `tokio-runtime` | Enable support for the `tokio` crate. | [tokio](https://crates.io/crates/tokio) | yes |
-//! | `async-std-runtime` | Enable support for the `async-std` crate. | [async-std](https://crates.io/crates/async-std)<br>[tokio](https://crates.io/crates/tokio) with `sync` feature | no |
-//! | `actix-runtime` | Enable support for the `actix-rt` crate. | [actix-rt](https://crates.io/crates/actix-rt)<br>[tokio](https://crates.io/crates/tokio) with `sync` feature | no |
+//! | `default` | The same as `tokio-runtime` feature | [actix-send-macros](https://github.com/fakeshadow/actix_send)<br>[async-trait](https://crates.io/crates/async-trait)<br>[futures_util](https://crates.io/crates/futures-util)<br>[pin-project](https://crates.io/crates/pin-project) | yes |
+//! | `tokio-runtime` | Enable support for the `tokio` crate. | [async-channel](https://crates.io/crates/async-channel)<br>[tokio](https://crates.io/crates/tokio) | yes |
+//! | `async-std-runtime` | Enable support for the `async-std` crate. | [async-channel](https://crates.io/crates/async-channel)<br>[async-std](https://crates.io/crates/async-std)<br>[tokio](https://crates.io/crates/tokio) with `sync` feature | no |
+//! | `actix-runtime` | Enable support for the `actix-rt` crate. | [actix-rt](https://crates.io/crates/actix-rt)<br>[async-channel](https://crates.io/crates/async-channel)<br>[tokio](https://crates.io/crates/tokio) with `sync` feature | no |
+//! | `actix-runtime-local` | Enable support for strict thread local actor for `actix-rt`. | [actix-rt](https://crates.io/crates/actix-rt)<br>[actix-utils](https://crates.io/crates/actix-utils) | no |
 
 #![forbid(unsafe_code)]
 #![deny(unused_variables)]
@@ -149,7 +150,9 @@ pub(crate) mod util;
 pub mod prelude {
     pub use crate::actor::{Actor, Handler};
     pub use crate::address::{Address, MapResult, WeakAddress};
+    pub use crate::builder::Builder;
     pub use crate::error::ActixSendError;
+    pub use crate::stream::{ActorSkipStream, ActorStream};
     pub use crate::util::runtime::spawn_blocking as actix_send_blocking;
     pub use actix_send_macros::*;
     pub use async_trait::async_trait;

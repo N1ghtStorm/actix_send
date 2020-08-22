@@ -3,28 +3,30 @@ use core::marker::PhantomData;
 use core::pin::Pin;
 use core::time::Duration;
 
-use std::sync::Arc;
 use std::thread::JoinHandle;
 
-use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
+// use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 
 use crate::actor::Actor;
 use crate::context::{ContextMessage, InstantMessage};
 use crate::error::ActixSendError;
 use crate::object::AnyObjectContainer;
 use crate::sender::WeakSender;
-use crate::util::runtime;
+use crate::util::{
+    runtime,
+    smart_pointer::{AsyncLock, AsyncLockGuard, RefCounter},
+};
 
 // subscribe hold a vector of trait objects which are boxed Subscriber that contains
 // Sender<ContextMessage<Actor>> and an associate message type.
 macro_rules! subscribe {
     ($($send:ident)*) => {
         pub(crate) struct Subscribe {
-            inner: Arc<AsyncMutex<Vec<Box<dyn SubscribeTrait $( + $send)*>>>>,
+            inner: RefCounter<AsyncLock<Vec<Box<dyn SubscribeTrait $( + $send)*>>>>,
         }
 
         impl Subscribe {
-            pub(crate) async fn lock(&self) -> AsyncMutexGuard<'_, Vec<Box<dyn SubscribeTrait $( + $send)*>>> {
+            pub(crate) async fn lock(&self) -> AsyncLockGuard<'_, Vec<Box<dyn SubscribeTrait $( + $send)*>>> {
                 self.inner.lock().await
             }
         }

@@ -4,17 +4,15 @@ use std::task::{Context, Poll};
 use actix_send::prelude::*;
 use futures_util::stream::{Stream, StreamExt};
 
-use crate::my_actor::*;
-
 #[tokio::main]
 async fn main() {
     let builder = MyActor::builder(|| async { MyActor });
     let address = builder.start().await;
 
-    // create a mock stream
+    // create a mock stream that would produce Strings as item.
     let stream = MockStream { offset: 0 };
 
-    // by sending the stream to actor we can handle every stream item as a message
+    // by sending the stream to actor we can handle every stream item as a actor message
     // and return the result as a new stream
 
     // impl From trait for auto converting stream item to a message type.
@@ -24,7 +22,8 @@ async fn main() {
         }
     }
 
-    // send the stream to actor.
+    // send the stream to actor.type signature is for inferring what message type the stream would
+    // be convert into and sent to actor.
     let mut new_stream = address.send_stream::<_, _, Message1>(stream);
 
     let future1 = async move {
@@ -49,24 +48,18 @@ async fn main() {
     futures_util::future::join(future1, future2).await;
 }
 
-#[actor_mod]
-pub mod my_actor {
-    use super::*;
+#[actor]
+pub struct MyActor;
 
-    #[actor]
-    pub struct MyActor;
+pub struct Message1 {
+    pub from: String,
+}
 
-    #[message(result = "String")]
-    pub struct Message1 {
-        pub from: String,
-    }
-
-    #[handler]
-    impl Handler for MyActor {
-        async fn handle(&mut self, msg: Message1) -> String {
-            // We just echo back the from field of incoming message.
-            msg.from
-        }
+#[handler_v2]
+impl Handler for MyActor {
+    async fn handle(&mut self, msg: Message1) -> String {
+        // We just echo back the from field of incoming message.
+        msg.from
     }
 }
 

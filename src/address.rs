@@ -14,7 +14,7 @@ use crate::context::{
 use crate::error::ActixSendError;
 use crate::object::AnyObjectContainer;
 use crate::sender::{GroupSender, Sender, WeakGroupSender, WeakSender};
-use crate::stream::ActorStream;
+use crate::stream::{ActorSkipStream, ActorStream};
 use crate::subscribe::Subscribe;
 use crate::util::{channel::oneshot_channel, future_handle::FutureHandler, runtime};
 
@@ -163,7 +163,8 @@ where
 
     /// Send a stream to actor(s) and return a new stream applied with `Handler::handle` method.
     ///
-    /// *. Item of the stream must be actor's message type.
+    /// *. Item of the stream must be one of actor's message types.
+    /// (Or with trait Into<Actor::Message> impl)
     #[must_use = "futures do nothing unless you `.await` or poll them"]
     pub fn send_stream<S, I, M>(&self, stream: S) -> ActorStream<A, S, I, M>
     where
@@ -172,6 +173,25 @@ where
         M: Into<A::Message> + MapResult<A::Result> + 'static,
     {
         ActorStream::new(stream, self.tx.clone())
+    }
+
+    /// Send a skip stream to actor(s) and return a new stream applied with `Handler::handle`
+    /// method.
+    ///
+    /// Original stream would produce optional item and when None is produced ActorSkipStream would
+    /// keep poll_next until the item of original stream become Some or goes into pending/finished
+    /// state.
+    ///
+    /// *. `Some` variant of the original stream's Item must be one of actor's message types.
+    /// (Or with trait Into<Actor::Message> impl)
+    #[must_use = "futures do nothing unless you `.await` or poll them"]
+    pub fn send_skip_stream<S, I, M>(&self, stream: S) -> ActorSkipStream<A, S, I, M>
+    where
+        S: Stream<Item = Option<I>>,
+        I: Into<M>,
+        M: Into<A::Message> + MapResult<A::Result> + 'static,
+    {
+        ActorSkipStream::new(stream, self.tx.clone())
     }
 
     /// Send a broadcast message to all actor instances that are alive for this address.

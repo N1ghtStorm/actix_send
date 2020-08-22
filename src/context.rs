@@ -24,9 +24,6 @@ where
     generation: usize,
     tx: WeakSender<ContextMessage<A>>,
     rx: Option<Recv<A>>,
-    // When rx_sub is Some we take both rx and rx_sub and construct selector field.
-    rx_sub: Option<Recv<A>>,
-    // If selector is None then rx must be Some.
     selector: Option<Select<Recv<A>, Recv<A>>>,
     manual_shutdown: bool,
     actor: A,
@@ -47,13 +44,18 @@ where
         actor: A,
         state: ActorState<A>,
     ) -> Self {
+        // When rx_sub is Some we take both rx and rx_sub and construct selector field.
+        let (rx, selector) = match rx_sub {
+            Some(rx_sub) => (None, Some(select(rx, rx_sub))),
+            None => (Some(rx), None),
+        };
+
         Self {
             id,
             generation: 0,
             tx,
-            rx: Some(rx),
-            rx_sub,
-            selector: None,
+            rx,
+            selector,
             manual_shutdown: false,
             actor,
             state,
@@ -169,11 +171,6 @@ where
     }
 
     pub(crate) fn spawn_loop(mut self) {
-        // this would only happen once.
-        if let Some(rx_sub) = self.rx_sub.take() {
-            self.selector = Some(select(self.rx.take().unwrap(), rx_sub));
-        }
-
         runtime::spawn(async {
             self.actor.on_start().await;
             self.state.inc_active();
