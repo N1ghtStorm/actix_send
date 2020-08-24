@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use actix_send_websocket::Message;
-use futures::channel::mpsc::UnboundedSender;
+use futures_channel::mpsc::UnboundedSender;
 
 /// `ChatServer` manages chat rooms and responsible for coordinating chat
 /// session. implementation is super primitive

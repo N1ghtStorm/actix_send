@@ -1,11 +1,8 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use parking_lot::{Mutex, MutexGuard};
-
 use actix_files as fs;
-use actix_send::prelude::*;
-use actix_send_websocket::{Message, WebSocketMessage};
+use actix_send_websocket::prelude::*;
 use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer};
 
 mod server;
@@ -45,9 +42,9 @@ async fn chat_route(
     // simulate the heartbeat on server side.
     // in real world this would be the client's task.
     let addr = address.downgrade();
-    actix_rt::spawn(async move {
+    actix_web::rt::spawn(async move {
         loop {
-            let _ = actix_rt::time::delay_for(HEARTBEAT_INTERVAL).await;
+            let _ = actix_web::rt::time::delay_for(HEARTBEAT_INTERVAL).await;
             if let Some(addr) = addr.upgrade() {
                 let _ = addr
                     .run(|session| {
@@ -65,14 +62,14 @@ async fn chat_route(
     let (res, tx) = actix_send_websocket::start_with_tx(address, &req, stream).await?;
 
     // insert the sender and our session id to the chat server.
-    srv.get_ref().lock().connect(id, tx);
+    srv.get_ref().lock().unwrap().connect(id, tx);
 
     // return the response.
     Ok(res)
 }
 
 // definition of session actor.
-#[actor(no_send)]
+#[ws(no_send)]
 pub struct WsChatSession {
     /// unique session id
     pub id: usize,
@@ -87,7 +84,11 @@ pub struct WsChatSession {
     pub server: Arc<Mutex<server::ChatServer>>,
 }
 
-#[handler_v2(no_send)]
+// use a type alias for Result<Message, ProtocolError>
+// this is the limitation of actix_send.
+type WsMessage = Result<Message, ProtocolError>;
+
+#[ws_handler(no_send)]
 impl WsChatSession {
     // this method is called before session actor stop.
     #[on_stop]
@@ -97,7 +98,7 @@ impl WsChatSession {
 
     // definition of handle method for incoming websocket stream message.
     // note we can return optional websocket messages directly in the method.
-    async fn handle(&mut self, msg: WebSocketMessage) -> Option<Vec<Message>> {
+    async fn handle(&mut self, msg: WsMessage) -> Option<Vec<Message>> {
         // if the heartbeat is beyond the timeout we send close message to client.
         if Instant::now().duration_since(self.hb) > CLIENT_TIMEOUT {
             return Some(vec![Message::Close(None)]);
@@ -139,9 +140,7 @@ impl WsChatSession {
 
                                 Some(vec![Message::Text("joined".into())])
                             } else {
-                                Some(vec![Message::Text(
-                                    "!!! room name is required".into(),
-                                )])
+                                Some(vec![Message::Text("!!! room name is required".into())])
                             }
                         }
                         "/name" => {
@@ -152,10 +151,7 @@ impl WsChatSession {
                                 Some(vec![Message::Text("!!! name is required".into())])
                             }
                         }
-                        _ => Some(vec![Message::Text(format!(
-                            "!!! unknown command: {:?}",
-                            m
-                        ))]),
+                        _ => Some(vec![Message::Text(format!("!!! unknown command: {:?}", m))]),
                     }
                 } else {
                     let msg = if let Some(ref name) = self.name {
@@ -165,11 +161,8 @@ impl WsChatSession {
                     };
                     // send message to chat server
 
-                    self.get_server().send_message(
-                        self.room.as_str(),
-                        msg.as_str(),
-                        self.id,
-                    );
+                    self.get_server()
+                        .send_message(self.room.as_str(), msg.as_str(), self.id);
 
                     None
                 }
@@ -187,15 +180,13 @@ impl WsChatSession {
 
 impl WsChatSession {
     fn get_server(&self) -> MutexGuard<'_, server::ChatServer> {
-        self.server.lock()
+        self.server.lock().unwrap()
     }
 }
 
-#[actix_rt::main]
+#[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    env_logger::init();
-
-    // Start chat server actor
+    // Start chat server
     let server = Arc::new(Mutex::new(server::ChatServer::default()));
 
     // Create Http server with websocket support

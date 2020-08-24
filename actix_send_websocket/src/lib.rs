@@ -4,8 +4,10 @@ use core::task::{Context, Poll};
 use std::io;
 
 pub mod prelude {
+    pub use crate::{Message, ProtocolError};
     pub use actix_send::prelude::{
-        actor, async_trait, handler_v2, ActixSendError, Actor, Builder, Handler, MapResult,
+        actor as ws, async_trait, handler, handler_v2 as ws_handler, ActixSendError, Actor,
+        Handler, MapResult,
     };
 }
 
@@ -24,8 +26,7 @@ use actix_web::{
 use futures_channel::mpsc::UnboundedReceiver;
 use futures_util::stream::Stream;
 
-pub type WebSocketMessage = Result<Message, ProtocolError>;
-
+// start the websocket connection with a given actor address.
 pub async fn start<A, S>(
     addr: Address<A>,
     req: &HttpRequest,
@@ -33,9 +34,9 @@ pub async fn start<A, S>(
 ) -> Result<HttpResponse, Error>
 where
     A: Actor + Handler + 'static,
-    A::Message: From<WebSocketMessage>,
+    A::Message: From<Result<Message, ProtocolError>>,
     S: Stream<Item = Result<Bytes, PayloadError>> + Unpin + 'static,
-    WebSocketMessage: MapResult<A::Result, Output = Option<Vec<Message>>>,
+    Result<Message, ProtocolError>: MapResult<A::Result, Output = Option<Vec<Message>>>,
 {
     let mut res = handshake(&req)?;
 
@@ -48,7 +49,7 @@ where
         closed: false,
     };
 
-    let actor_stream = addr.send_stream::<_, _, WebSocketMessage>(decode_stream);
+    let actor_stream = addr.send_stream::<_, _, Result<Message, ProtocolError>>(decode_stream);
 
     let encode_stream = EncodeStream {
         rx: None,
@@ -61,6 +62,8 @@ where
     Ok(res.streaming(encode_stream))
 }
 
+// start the websocket with an extra channel sender.
+// the sender can be used to add websocket message to handler from other threads.
 pub async fn start_with_tx<A, S>(
     addr: Address<A>,
     req: &HttpRequest,
@@ -74,9 +77,9 @@ pub async fn start_with_tx<A, S>(
 >
 where
     A: Actor + Handler + 'static,
-    A::Message: From<WebSocketMessage>,
+    A::Message: From<Result<Message, ProtocolError>>,
     S: Stream<Item = Result<Bytes, PayloadError>> + Unpin + 'static,
-    WebSocketMessage: MapResult<A::Result, Output = Option<Vec<Message>>>,
+    Result<Message, ProtocolError>: MapResult<A::Result, Output = Option<Vec<Message>>>,
 {
     let mut res = handshake(&req)?;
 
@@ -89,7 +92,7 @@ where
         closed: false,
     };
 
-    let actor_stream = addr.send_stream::<_, _, WebSocketMessage>(decode_stream);
+    let actor_stream = addr.send_stream::<_, _, Result<Message, ProtocolError>>(decode_stream);
 
     let (tx, rx) = futures_channel::mpsc::unbounded::<Message>();
 
@@ -197,6 +200,7 @@ pub fn handshake_with_protocols(
     Ok(response)
 }
 
+// decode incoming stream. eg: actix_web::web::Payload to a websocket Message.
 #[pin_project::pin_project]
 struct DecodeStream<S>
 where
@@ -213,6 +217,7 @@ impl<S> Stream for DecodeStream<S>
 where
     S: Stream<Item = Result<Bytes, PayloadError>>,
 {
+    // Decode error is packed with websocket Message and return as a Result.
     type Item = Result<Message, ProtocolError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -272,9 +277,11 @@ where
     }
 }
 
+// encode a stream of websocket message to Bytes.
 #[pin_project::pin_project]
 struct EncodeStream<S>
 where
+    // messages come as an option.
     S: Stream<Item = Result<Option<Vec<Message>>, ActixSendError>>,
 {
     rx: Option<UnboundedReceiver<Message>>,
