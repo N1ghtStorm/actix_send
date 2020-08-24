@@ -3,11 +3,12 @@ use core::pin::Pin;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::time::Duration;
 
-use std::sync::{Arc, Mutex};
-
 use crate::builder::{Builder, BuilderFnContainer, Config};
 use crate::interval::IntervalFutureSet;
-use crate::util::future_handle::FutureHandler;
+use crate::util::{
+    future_handle::FutureHandler,
+    smart_pointer::{Lock, RefCounter},
+};
 
 macro_rules! actor {
     ($($send:ident)*) => {
@@ -68,9 +69,9 @@ where
 {
     // The count of actors we actually spawned.
     // With the last bit as MARKER to indicate if the address is dropping.
-    active: Arc<AtomicUsize>,
+    active: RefCounter<AtomicUsize>,
     // Actors delayed and interval task handlers. Used to drop all tasks when actor is shutdown.
-    handlers: Arc<Mutex<Vec<FutureHandler<A>>>>,
+    handlers: RefCounter<Lock<Vec<FutureHandler<A>>>>,
     // All the interval future objects are stored in this set.
     pub(crate) interval_futures: IntervalFutureSet<A>,
     // config for setting inherent from Builder.
@@ -97,8 +98,8 @@ where
 {
     pub(crate) fn new(config: Config) -> Self {
         Self {
-            active: Arc::new(AtomicUsize::new(0)),
-            handlers: Default::default(),
+            active: RefCounter::new(AtomicUsize::new(0)),
+            handlers: RefCounter::new(Lock::new(Vec::new())),
             interval_futures: Default::default(),
             config,
         }
@@ -107,7 +108,7 @@ where
     pub(crate) fn push_handler(&self, handler: Vec<FutureHandler<A>>) {
         // Only push the handler if actors not shutdown.
         if self.is_running() {
-            self.handlers.lock().unwrap().extend(handler);
+            self.handlers.lock().extend(handler);
         }
     }
 
@@ -172,7 +173,7 @@ where
         // We write marker to the last bit of active usize.
         self.active.fetch_or(MARKER, Ordering::Relaxed);
         // cancel all the actors future handlers for delayed and interval tasks.
-        for handler in self.handlers.lock().unwrap().iter() {
+        for handler in self.handlers.lock().iter() {
             handler.cancel();
         }
     }

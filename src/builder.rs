@@ -147,9 +147,7 @@ where
     pub async fn start(self) -> Address<A> {
         let num = self.config.num;
 
-        let (tx, rx) = unbounded::<ContextMessage<A>>();
-        let rx = Receiver::from(rx);
-        let tx = Sender::from(tx);
+        let (tx, rx) = unbounded_channel::<ContextMessage<A>>();
 
         let state = ActorState::new(self.config);
         let mut subs = Vec::with_capacity(num);
@@ -191,9 +189,7 @@ where
             "It doesn't make sense to construct multiple instances of actor on single thread."
         );
 
-        let (tx, rx) = unbounded::<ContextMessage<A>>();
-        let rx = Receiver::from(rx);
-        let tx = Sender::from(tx);
+        let (tx, rx) = unbounded_channel::<ContextMessage<A>>();
 
         let state = ActorState::new(self.config);
         let mut subs = Vec::with_capacity(num);
@@ -231,9 +227,7 @@ where
     pub async fn start_with_arbiter(self, arbiters: &[actix_rt::Arbiter]) -> Address<A> {
         let num = self.config.num;
 
-        let (tx, rx) = unbounded::<ContextMessage<A>>();
-        let rx = Receiver::from(rx);
-        let tx = Sender::from(tx);
+        let (tx, rx) = unbounded_channel::<ContextMessage<A>>();
 
         let state = ActorState::new(self.config);
         let mut subs = Vec::with_capacity(num);
@@ -281,4 +275,10 @@ where
             target
         );
     }
+}
+
+fn unbounded_channel<A>() -> (Sender<A>, Receiver<A>) {
+    let (tx, rx) = unbounded::<A>();
+
+    (tx.into(), rx.into())
 }

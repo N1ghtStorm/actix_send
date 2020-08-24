@@ -1,19 +1,18 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use crate::actor::Actor;
 use crate::object::FutureObjectContainer;
-use crate::util::smart_pointer::{AsyncLock, AsyncLockGuard};
+use crate::util::smart_pointer::{AsyncLock, AsyncLockGuard, RefCounter};
 
 // A shared hashmap of interval futures set between a set of actors.
 pub(crate) struct IntervalFutureSet<A>
 where
     A: Actor,
 {
-    next_key: Arc<AtomicUsize>,
-    futures: Arc<AsyncLock<HashMap<usize, FutureObjectContainer<A>>>>,
+    next_key: RefCounter<AtomicUsize>,
+    futures: RefCounter<AsyncLock<HashMap<usize, FutureObjectContainer<A>>>>,
 }
 
 impl<A> Clone for IntervalFutureSet<A>
@@ -34,7 +33,7 @@ where
 {
     fn default() -> Self {
         Self {
-            next_key: Arc::new(AtomicUsize::new(0)),
+            next_key: RefCounter::new(AtomicUsize::new(0)),
             futures: Default::default(),
         }
     }

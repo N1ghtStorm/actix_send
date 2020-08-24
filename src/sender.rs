@@ -80,8 +80,7 @@ where
         self.inner.send(msg).map_err(|_| ActixSendError::Closed)
     }
 
-    pub(crate) async fn send_timeout(&self, msg: M, dur: Duration) -> Result<(), ActixSendError> {
-        drop(dur);
+    pub(crate) async fn send_timeout(&self, msg: M, _dur: Duration) -> Result<(), ActixSendError> {
         self.send(msg).await
     }
 }

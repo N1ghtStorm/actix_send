@@ -3,7 +3,6 @@ use core::marker::PhantomData;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::time::Duration;
-use std::sync::Arc;
 
 use futures_util::stream::{FuturesUnordered, Stream, StreamExt};
 
@@ -16,14 +15,16 @@ use crate::object::AnyObjectContainer;
 use crate::sender::{GroupSender, Sender, WeakGroupSender, WeakSender};
 use crate::stream::{ActorSkipStream, ActorStream};
 use crate::subscribe::Subscribe;
-use crate::util::{channel::oneshot_channel, future_handle::FutureHandler, runtime};
+use crate::util::{
+    channel::oneshot_channel, future_handle::FutureHandler, runtime, smart_pointer::RefCounter,
+};
 
 // A channel sender for communicating with actor(s).
 pub struct Address<A>
 where
     A: Actor + 'static,
 {
-    strong_count: Arc<AtomicUsize>,
+    strong_count: RefCounter<AtomicUsize>,
     tx: Sender<ContextMessage<A>>,
     tx_subs: Option<GroupSender<A>>,
     subs: Option<Subscribe>,
@@ -94,7 +95,7 @@ where
         };
 
         Self {
-            strong_count: Arc::new(AtomicUsize::new(1)),
+            strong_count: RefCounter::new(AtomicUsize::new(1)),
             tx,
             tx_subs,
             subs,
@@ -397,7 +398,7 @@ pub struct WeakAddress<A>
 where
     A: Actor,
 {
-    strong_count: Arc<AtomicUsize>,
+    strong_count: RefCounter<AtomicUsize>,
     tx: WeakSender<ContextMessage<A>>,
     tx_subs: Option<WeakGroupSender<A>>,
     state: ActorState<A>,

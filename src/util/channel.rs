@@ -27,8 +27,7 @@ pub(crate) mod channel_inner {
         },
     };
 
-    pub(crate) fn bounded<A>(cap: usize) -> (Sender<A>, Receiver<A>) {
-        drop(cap);
+    pub(crate) fn bounded<A>(_cap: usize) -> (Sender<A>, Receiver<A>) {
         actix_utils::mpsc::channel()
     }
 

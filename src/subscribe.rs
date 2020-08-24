@@ -5,8 +5,6 @@ use core::time::Duration;
 
 use std::thread::JoinHandle;
 
-// use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
-
 use crate::actor::Actor;
 use crate::context::{ContextMessage, InstantMessage};
 use crate::error::ActixSendError;

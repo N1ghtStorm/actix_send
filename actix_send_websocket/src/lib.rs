@@ -1,49 +1,107 @@
+use core::pin::Pin;
+use core::task::{Context, Poll};
+
+use std::io;
+
+pub mod prelude {
+    pub use actix_send::prelude::{
+        actor, async_trait, handler_v2, ActixSendError, Actor, Builder, Handler, MapResult,
+    };
+}
+
+pub use actix_http::ws::{CloseCode, CloseReason, Frame, HandshakeError, Message, ProtocolError};
+
 use actix_codec::{Decoder, Encoder};
 use actix_http::ws::{hash_key, Codec};
-pub use actix_http::ws::{CloseCode, CloseReason, Frame, HandshakeError, Message, ProtocolError};
-use actix_send::prelude::*;
-use actix_web::dev::HttpResponseBuilder;
-use actix_web::error::{Error, PayloadError};
-use actix_web::http::{header, Method, StatusCode};
-use actix_web::{HttpRequest, HttpResponse};
-use bytes::Bytes;
-use futures_util::stream::{Stream, StreamExt};
+use actix_send::prelude::{ActixSendError, Actor, Address, Handler, MapResult};
+use actix_web::web::{Bytes, BytesMut};
+use actix_web::{
+    dev::HttpResponseBuilder,
+    error::{Error, PayloadError},
+    http::{header, Method, StatusCode},
+    HttpRequest, HttpResponse,
+};
+use futures_channel::mpsc::UnboundedReceiver;
+use futures_util::stream::Stream;
+
+pub type WebSocketMessage = Result<Message, ProtocolError>;
 
 pub async fn start<A, S>(
-    builder: Builder<A>,
+    addr: Address<A>,
     req: &HttpRequest,
     stream: S,
 ) -> Result<HttpResponse, Error>
 where
     A: Actor + Handler + 'static,
-    A::Message: From<Result<Bytes, PayloadError>>,
+    A::Message: From<WebSocketMessage>,
     S: Stream<Item = Result<Bytes, PayloadError>> + Unpin + 'static,
-    Result<Bytes, PayloadError>: MapResult<A::Result, Output = Option<WebsocketMessage>>,
+    WebSocketMessage: MapResult<A::Result, Output = Option<Vec<Message>>>,
 {
     let mut res = handshake(&req)?;
 
-    let addr = builder.start().await;
+    let codec = Codec::new();
 
-    let stream = addr
-        .send_stream::<_, _, Result<Bytes, PayloadError>>(stream)
-        .map(|res| match res {
-            Ok(Some(msg)) => Some(Ok(msg)),
-            Ok(None) => None,
-            Err(e) => Some(Err(e)),
-        });
+    let decode_stream = DecodeStream {
+        stream,
+        codec,
+        buf: BytesMut::new(),
+        closed: false,
+    };
 
-    let builder = EncodeActor::builder(|| async { EncodeActor });
-    let enc_addr: Address<EncodeActor> = builder.start().await;
+    let actor_stream = addr.send_stream::<_, _, WebSocketMessage>(decode_stream);
 
-    let stream = enc_addr
-        .send_skip_stream::<_, _, WebsocketEncodeMessage>(stream)
-        .map(|res| match res {
-            Ok(Ok(bytes)) => Ok(bytes),
-            Ok(Err(e)) => Err(e),
-            Err(e) => Err(actix_http::error::ErrorInternalServerError::<&str>("lol")),
-        });
+    let encode_stream = EncodeStream {
+        rx: None,
+        stream: actor_stream,
+        buf: BytesMut::new(),
+        codec,
+        queue: Vec::new(),
+    };
 
-    Ok(res.streaming(stream))
+    Ok(res.streaming(encode_stream))
+}
+
+pub async fn start_with_tx<A, S>(
+    addr: Address<A>,
+    req: &HttpRequest,
+    stream: S,
+) -> Result<
+    (
+        HttpResponse,
+        futures_channel::mpsc::UnboundedSender<Message>,
+    ),
+    Error,
+>
+where
+    A: Actor + Handler + 'static,
+    A::Message: From<WebSocketMessage>,
+    S: Stream<Item = Result<Bytes, PayloadError>> + Unpin + 'static,
+    WebSocketMessage: MapResult<A::Result, Output = Option<Vec<Message>>>,
+{
+    let mut res = handshake(&req)?;
+
+    let codec = Codec::new();
+
+    let decode_stream = DecodeStream {
+        stream,
+        codec,
+        buf: BytesMut::new(),
+        closed: false,
+    };
+
+    let actor_stream = addr.send_stream::<_, _, WebSocketMessage>(decode_stream);
+
+    let (tx, rx) = futures_channel::mpsc::unbounded::<Message>();
+
+    let encode_stream = EncodeStream {
+        rx: Some(rx),
+        stream: actor_stream,
+        buf: BytesMut::new(),
+        codec,
+        queue: Vec::new(),
+    };
+
+    Ok((res.streaming(encode_stream), tx))
 }
 
 /// Prepare `WebSocket` handshake response.
@@ -72,7 +130,7 @@ pub fn handshake_with_protocols(
     }
 
     // Check for "UPGRADE" to websocket header
-    let has_hdr = if let Some(hdr) = req.headers().get(&header::UPGRADE) {
+    let has_hdr = if let Some(hdr) = req.headers().get(header::UPGRADE) {
         if let Ok(s) = hdr.to_str() {
             s.to_ascii_lowercase().contains("websocket")
         } else {
@@ -91,11 +149,11 @@ pub fn handshake_with_protocols(
     }
 
     // check supported version
-    if !req.headers().contains_key(&header::SEC_WEBSOCKET_VERSION) {
+    if !req.headers().contains_key(header::SEC_WEBSOCKET_VERSION) {
         return Err(HandshakeError::NoVersionHeader);
     }
     let supported_ver = {
-        if let Some(hdr) = req.headers().get(&header::SEC_WEBSOCKET_VERSION) {
+        if let Some(hdr) = req.headers().get(header::SEC_WEBSOCKET_VERSION) {
             hdr == "13" || hdr == "8" || hdr == "7"
         } else {
             false
@@ -106,18 +164,18 @@ pub fn handshake_with_protocols(
     }
 
     // check client handshake for validity
-    if !req.headers().contains_key(&header::SEC_WEBSOCKET_KEY) {
+    if !req.headers().contains_key(header::SEC_WEBSOCKET_KEY) {
         return Err(HandshakeError::BadWebsocketKey);
     }
     let key = {
-        let key = req.headers().get(&header::SEC_WEBSOCKET_KEY).unwrap();
+        let key = req.headers().get(header::SEC_WEBSOCKET_KEY).unwrap();
         hash_key(key.as_ref())
     };
 
     // check requested protocols
     let protocol = req
         .headers()
-        .get(&header::SEC_WEBSOCKET_PROTOCOL)
+        .get(header::SEC_WEBSOCKET_PROTOCOL)
         .and_then(|req_protocols| {
             let req_protocols = req_protocols.to_str().ok()?;
             req_protocols
@@ -133,33 +191,152 @@ pub fn handshake_with_protocols(
         .take();
 
     if let Some(protocol) = protocol {
-        response.header(&header::SEC_WEBSOCKET_PROTOCOL, protocol);
+        response.header(header::SEC_WEBSOCKET_PROTOCOL, protocol);
     }
 
     Ok(response)
 }
 
-pub struct WebsocketMessage;
+#[pin_project::pin_project]
+struct DecodeStream<S>
+where
+    S: Stream<Item = Result<Bytes, PayloadError>>,
+{
+    #[pin]
+    stream: S,
+    codec: Codec,
+    buf: BytesMut,
+    closed: bool,
+}
 
-impl From<Result<WebsocketMessage, ActixSendError>> for WebsocketEncodeMessage {
-    fn from(res: Result<WebsocketMessage, ActixSendError>) -> Self {
-        WebsocketEncodeMessage(res)
+impl<S> Stream for DecodeStream<S>
+where
+    S: Stream<Item = Result<Bytes, PayloadError>>,
+{
+    type Item = Result<Message, ProtocolError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let mut this = self.as_mut().project();
+
+        if !*this.closed {
+            loop {
+                this = self.as_mut().project();
+                match Pin::new(&mut this.stream).poll_next(cx) {
+                    Poll::Ready(Some(Ok(chunk))) => {
+                        this.buf.extend_from_slice(&chunk[..]);
+                    }
+                    Poll::Ready(None) => {
+                        *this.closed = true;
+                        break;
+                    }
+                    Poll::Pending => break,
+                    Poll::Ready(Some(Err(e))) => {
+                        return Poll::Ready(Some(Err(ProtocolError::Io(io::Error::new(
+                            io::ErrorKind::Other,
+                            format!("{}", e),
+                        )))));
+                    }
+                }
+            }
+        }
+
+        match this.codec.decode(this.buf)? {
+            None => {
+                if *this.closed {
+                    Poll::Ready(None)
+                } else {
+                    Poll::Pending
+                }
+            }
+            Some(frm) => {
+                let msg = match frm {
+                    Frame::Text(data) => Message::Text(
+                        std::str::from_utf8(&data)
+                            .map_err(|e| {
+                                ProtocolError::Io(io::Error::new(
+                                    io::ErrorKind::Other,
+                                    format!("{}", e),
+                                ))
+                            })?
+                            .to_string(),
+                    ),
+                    Frame::Binary(data) => Message::Binary(data),
+                    Frame::Ping(s) => Message::Ping(s),
+                    Frame::Pong(s) => Message::Pong(s),
+                    Frame::Close(reason) => Message::Close(reason),
+                    Frame::Continuation(item) => Message::Continuation(item),
+                };
+                Poll::Ready(Some(Ok(msg)))
+            }
+        }
     }
 }
 
-#[actor(no_send)]
-pub struct EncodeActor;
+#[pin_project::pin_project]
+struct EncodeStream<S>
+where
+    S: Stream<Item = Result<Option<Vec<Message>>, ActixSendError>>,
+{
+    rx: Option<UnboundedReceiver<Message>>,
+    #[pin]
+    stream: S,
+    codec: Codec,
+    buf: BytesMut,
+    queue: Vec<Message>,
+}
 
-pub struct WebsocketEncodeMessage(Result<WebsocketMessage, ActixSendError>);
+impl<S> Stream for EncodeStream<S>
+where
+    S: Stream<Item = Result<Option<Vec<Message>>, ActixSendError>>,
+{
+    type Item = Result<Bytes, Error>;
 
-#[handler_v2(no_send)]
-impl EncodeActor {
-    async fn handle(&mut self, msg: WebsocketEncodeMessage) -> Result<Bytes, Error> {
-        match msg.0 {
-            Ok(msg) => (),
-            Err(e) => (),
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let mut this = self.as_mut().project();
+
+        if this.rx.is_some() {
+            match Pin::new(&mut this.rx.as_mut().unwrap()).poll_next(cx) {
+                Poll::Ready(Some(msg)) => {
+                    return match this.codec.encode(msg, &mut this.buf) {
+                        Ok(()) => Poll::Ready(Some(Ok(this.buf.split().freeze()))),
+                        Err(e) => Poll::Ready(Some(Err(e.into()))),
+                    };
+                }
+                Poll::Ready(None) => *this.rx = None,
+                Poll::Pending => (),
+            }
         }
 
-        Ok(Bytes::new())
+        if let Some(msg) = this.queue.pop() {
+            let poll = match this.codec.encode(msg, &mut this.buf) {
+                Ok(()) => Poll::Ready(Some(Ok(this.buf.split().freeze()))),
+                Err(e) => Poll::Ready(Some(Err(e.into()))),
+            };
+            cx.waker().wake_by_ref();
+            return poll;
+        }
+
+        loop {
+            match Pin::new(&mut this.stream).poll_next(cx) {
+                Poll::Ready(Some(Ok(Some(ref mut msgs)))) => {
+                    std::mem::swap(msgs, &mut this.queue);
+                    return match this.queue.pop() {
+                        Some(msg) => match this.codec.encode(msg, &mut this.buf) {
+                            Ok(()) => Poll::Ready(Some(Ok(this.buf.split().freeze()))),
+                            Err(e) => Poll::Ready(Some(Err(e.into()))),
+                        },
+                        None => Poll::Pending,
+                    };
+                }
+                Poll::Ready(Some(Err(_))) => {
+                    return Poll::Ready(Some(Err(actix_web::error::ErrorInternalServerError::<
+                        &str,
+                    >("test"))));
+                }
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Ready(Some(Ok(None))) => continue,
+            }
+        }
     }
 }
