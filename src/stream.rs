@@ -24,8 +24,13 @@ where
     #[pin]
     stream: S,
     tx: Sender<ContextMessage<A>>,
-    rx_one: Option<OneShotReceiver<A::Result>>,
+    state: ActorStreamState<A::Result>,
     _m: PhantomData<M>,
+}
+
+enum ActorStreamState<A> {
+    Next,
+    Last(OneShotReceiver<A>),
 }
 
 impl<A, S, I, M> ActorStream<A, S, I, M>
@@ -39,7 +44,7 @@ where
         Self {
             stream,
             tx,
-            rx_one: None,
+            state: ActorStreamState::Next,
             _m: PhantomData,
         }
     }
@@ -57,44 +62,44 @@ where
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
 
-        // if we have a one shot receiver then we are waiting for the last message result.
-        if let Some(ref mut rx) = this.rx_one.as_mut() {
-            return match Pin::new(rx).poll(cx) {
+        match this.state {
+            ActorStreamState::Next => match this.stream.as_mut().poll_next(cx) {
+                Poll::Ready(Some(item)) => {
+                    let (tx, mut rx) = oneshot_channel();
+                    let msg = ContextMessage::Instant(InstantMessage::Static(
+                        Some(tx),
+                        item.into().into(),
+                    ));
+
+                    if let Err(e) = this.tx.try_send(msg) {
+                        return Poll::Ready(Some(Err(e)));
+                    }
+
+                    match Pin::new(&mut rx).poll(cx) {
+                        Poll::Ready(res) => match res {
+                            Ok(res) => Poll::Ready(Some(M::map(res))),
+                            Err(_) => Poll::Ready(Some(Err(ActixSendError::Canceled))),
+                        },
+                        Poll::Pending => {
+                            *this.state = ActorStreamState::Last(rx);
+                            Poll::Pending
+                        }
+                    }
+                }
                 Poll::Pending => Poll::Pending,
+                Poll::Ready(None) => Poll::Ready(None),
+            },
+            ActorStreamState::Last(ref mut rx) => match Pin::new(rx).poll(cx) {
                 Poll::Ready(res) => {
-                    *this.rx_one = None;
-                    match res {
+                    let poll = match res {
                         Ok(res) => Poll::Ready(Some(M::map(res))),
                         Err(_) => Poll::Ready(Some(Err(ActixSendError::Canceled))),
-                    }
+                    };
+                    *this.state = ActorStreamState::Next;
+                    poll
                 }
-            };
-        }
-
-        // poll and handle a new stream item.
-        match this.stream.as_mut().poll_next(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Ready(Some(item)) => {
-                let (tx, mut rx) = oneshot_channel();
-                let msg =
-                    ContextMessage::Instant(InstantMessage::Static(Some(tx), item.into().into()));
-
-                if let Err(e) = this.tx.try_send(msg) {
-                    return Poll::Ready(Some(Err(e)));
-                }
-
-                match Pin::new(&mut rx).poll(cx) {
-                    Poll::Pending => {
-                        *this.rx_one = Some(rx);
-                        Poll::Pending
-                    }
-                    Poll::Ready(res) => match res {
-                        Ok(res) => Poll::Ready(Some(M::map(res))),
-                        Err(_) => Poll::Ready(Some(Err(ActixSendError::Canceled))),
-                    },
-                }
-            }
+                Poll::Pending => Poll::Pending,
+            },
         }
     }
 }

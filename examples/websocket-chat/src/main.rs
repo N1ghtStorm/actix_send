@@ -36,26 +36,19 @@ async fn chat_route(
             }
         }
     });
+
     // start the actor and get it's address.
     let address = builder.start().await;
 
-    // simulate the heartbeat on server side.
-    // in real world this would be the client's task.
-    let addr = address.downgrade();
-    actix_web::rt::spawn(async move {
-        loop {
-            let _ = actix_web::rt::time::delay_for(HEARTBEAT_INTERVAL).await;
-            if let Some(addr) = addr.upgrade() {
-                let _ = addr
-                    .run(|session| {
-                        Box::pin(async move {
-                            session.hb = Instant::now();
-                        })
-                    })
-                    .await;
-            }
-        }
-    });
+    // simulate the heartbeat on server side. in real world this would be the client's task.
+    let _ = address
+        .run_interval(HEARTBEAT_INTERVAL, |session| {
+            Box::pin(async move {
+                session.hb = Instant::now();
+            })
+        })
+        .await
+        .unwrap();
 
     // start the websocket handing with a sender where message can be pushed to websocket stream
     // and handled by WsChatSession::handle method.
@@ -92,12 +85,12 @@ type WsMessage = Result<Message, ProtocolError>;
 impl WsChatSession {
     // this method is called before session actor stop.
     #[on_stop]
-    async fn this_happen_before_stop(&mut self) {
+    async fn on_stop(&mut self) {
         self.get_server().disconnect(self.id);
     }
 
     // definition of handle method for incoming websocket stream message.
-    // note we can return optional websocket messages directly in the method.
+    // we can return optional websocket messages directly in the method.
     async fn handle(&mut self, msg: WsMessage) -> Option<Vec<Message>> {
         // if the heartbeat is beyond the timeout we send close message to client.
         if Instant::now().duration_since(self.hb) > CLIENT_TIMEOUT {
@@ -146,7 +139,7 @@ impl WsChatSession {
                         "/name" => {
                             if v.len() == 2 {
                                 self.name = Some(v[1].to_owned());
-                                None
+                                Some(vec![Message::Text(format!("new name is {}", v[1]))])
                             } else {
                                 Some(vec![Message::Text("!!! name is required".into())])
                             }

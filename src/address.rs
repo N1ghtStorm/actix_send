@@ -52,7 +52,7 @@ where
     A: Actor,
 {
     fn drop(&mut self) {
-        if self.strong_count.fetch_sub(1, Ordering::Acquire) == 1 {
+        if self.strong_count.fetch_sub(1, Ordering::Acquire) == 0 {
             self.state.shutdown();
         }
     }

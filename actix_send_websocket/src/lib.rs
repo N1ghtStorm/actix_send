@@ -63,7 +63,7 @@ where
 }
 
 // start the websocket with an extra channel sender.
-// the sender can be used to add websocket message to handler from other threads.
+// the sender can be used to add websocket message to EncodeStream from other threads.
 pub async fn start_with_tx<A, S>(
     addr: Address<A>,
     req: &HttpRequest,
