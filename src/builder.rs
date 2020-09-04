@@ -7,7 +7,7 @@ use crate::address::Address;
 use crate::context::{ActorContext, ContextMessage};
 use crate::receiver::Receiver;
 use crate::sender::Sender;
-use crate::util::channel::{bounded, unbounded};
+use crate::util::channel::unbounded;
 
 pub struct Builder<A>
 where
@@ -43,10 +43,10 @@ macro_rules! builder_impl {
     }
 }
 
-#[cfg(not(feature = "actix-runtime-local"))]
+#[cfg(not(any(feature = "actix-runtime-mpsc", feature = "actix-runtime-local")))]
 builder_impl!(Send);
 
-#[cfg(feature = "actix-runtime-local")]
+#[cfg(any(feature = "actix-runtime-mpsc", feature = "actix-runtime-local"))]
 builder_impl!();
 
 // A trait would call build method on our actor builder function
@@ -143,44 +143,35 @@ where
     }
 
     /// Start actor(s) with the Builder settings.
-    #[cfg(not(feature = "actix-runtime-local"))]
+    #[cfg(not(any(feature = "actix-runtime-mpsc", feature = "actix-runtime-local")))]
     pub async fn start(self) -> Address<A> {
         let num = self.config.num;
 
         let (tx, rx) = unbounded_channel::<ContextMessage<A>>();
 
         let state = ActorState::new(self.config);
-        let mut subs = Vec::with_capacity(num);
+        let mut broadcast_senders = Vec::with_capacity(num);
 
         for i in 0..num {
             let actor = self.actor_builder.build().await;
 
-            let rx_sub = match state.allow_broadcast() {
-                true => {
-                    let (tx_sub, rx_sub) = bounded::<ContextMessage<A>>(num);
-
-                    subs.push(Sender::from(tx_sub));
-
-                    Some(rx_sub)
-                }
-                false => None,
-            };
+            let broadcast_receiver = state.broadcast_receiver(&mut broadcast_senders, num);
 
             ActorContext::new(
                 i,
                 tx.downgrade(),
                 rx.clone(),
-                rx_sub.map(Into::into),
+                broadcast_receiver,
                 actor,
                 state.clone(),
             )
             .spawn_loop();
         }
 
-        Address::new(tx, subs.into(), state)
+        Address::new(tx, broadcast_senders.into(), state)
     }
 
-    #[cfg(feature = "actix-runtime-local")]
+    #[cfg(any(feature = "actix-runtime-mpsc", feature = "actix-runtime-local"))]
     pub async fn start(self) -> Address<A> {
         let num = self.config.num;
 
@@ -192,32 +183,23 @@ where
         let (tx, rx) = unbounded_channel::<ContextMessage<A>>();
 
         let state = ActorState::new(self.config);
-        let mut subs = Vec::with_capacity(num);
+        let mut broadcast_senders = Vec::with_capacity(num);
 
         let actor = self.actor_builder.build().await;
 
-        let rx_sub = match state.allow_broadcast() {
-            true => {
-                let (tx_sub, rx_sub) = bounded::<ContextMessage<A>>(num);
-
-                subs.push(Sender::from(tx_sub));
-
-                Some(rx_sub)
-            }
-            false => None,
-        };
+        let broadcast_receiver = state.broadcast_receiver(&mut broadcast_senders, num);
 
         ActorContext::new(
             0,
             tx.downgrade(),
             rx,
-            rx_sub.map(Into::into),
+            broadcast_receiver,
             actor,
             state.clone(),
         )
         .spawn_loop();
 
-        Address::new(tx, subs.into(), state)
+        Address::new(tx, broadcast_senders.into(), state)
     }
 
     /// Start actors on the given arbiter slice.
@@ -230,7 +212,7 @@ where
         let (tx, rx) = unbounded_channel::<ContextMessage<A>>();
 
         let state = ActorState::new(self.config);
-        let mut subs = Vec::with_capacity(num);
+        let mut broadcast_senders = Vec::with_capacity(num);
 
         let len = arbiters.len();
 
@@ -239,22 +221,13 @@ where
 
             let actor = self.actor_builder.build().await;
 
-            let rx_sub = match state.allow_broadcast() {
-                true => {
-                    let (tx_sub, rx_sub) = bounded::<ContextMessage<A>>(num);
-
-                    subs.push(Sender::from(tx_sub));
-
-                    Some(rx_sub)
-                }
-                false => None,
-            };
+            let broadcast_receiver = state.broadcast_receiver(&mut broadcast_senders, num);
 
             let ctx = ActorContext::new(
                 i,
                 tx.downgrade(),
                 rx.clone().into(),
-                rx_sub.map(Into::into),
+                broadcast_receiver,
                 actor,
                 state.clone(),
             );
@@ -265,7 +238,7 @@ where
                 .exec_fn(|| ctx.spawn_loop());
         }
 
-        Address::new(tx, subs.into(), state)
+        Address::new(tx, broadcast_senders.into(), state)
     }
 
     fn check_num(num: usize, target: usize) {

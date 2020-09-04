@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use actix_send_websocket::Message;
 use futures_channel::mpsc::UnboundedSender;
@@ -8,6 +9,15 @@ use futures_channel::mpsc::UnboundedSender;
 pub struct ChatServer {
     sessions: HashMap<usize, UnboundedSender<Message>>,
     rooms: HashMap<String, HashSet<usize>>,
+}
+
+#[derive(Clone, Default)]
+pub struct SharedChatServer(Arc<Mutex<ChatServer>>);
+
+impl SharedChatServer {
+    pub fn get(&self) -> MutexGuard<'_, ChatServer> {
+        self.0.lock().unwrap()
+    }
 }
 
 impl Default for ChatServer {

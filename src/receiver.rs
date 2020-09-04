@@ -9,7 +9,7 @@ use crate::util::channel::Receiver as AsyncChannelReceiver;
 // A wrapper for crate::util::channel::Receiver so we have a unified abstraction for different
 // channels
 
-#[cfg(not(feature = "actix-runtime-local"))]
+#[cfg(not(any(feature = "actix-runtime-mpsc", feature = "actix-runtime-local")))]
 pub mod recv {
     use super::*;
 
@@ -28,7 +28,7 @@ pub mod recv {
     }
 }
 
-#[cfg(feature = "actix-runtime-local")]
+#[cfg(any(feature = "actix-runtime-mpsc", feature = "actix-runtime-local"))]
 pub mod recv {
     use super::*;
     use futures_util::stream::StreamExt;

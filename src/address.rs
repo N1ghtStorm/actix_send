@@ -320,7 +320,7 @@ macro_rules! address_run {
             {
                 let (tx, rx) = oneshot_channel();
 
-                let object = crate::object::FutureObject(f, PhantomData, PhantomData).pack();
+                let object = crate::object::FutureObject(f, PhantomData, std::sync::atomic::AtomicPtr::default()).pack();
 
                 let msg = ContextMessage::Instant(InstantMessage::Dynamic(Some(tx), object));
 
@@ -334,7 +334,7 @@ macro_rules! address_run {
             where
                 F: FnMut(&mut A) -> Pin<Box<dyn Future<Output = ()> $( + $send)* + '_>> + Send + 'static,
             {
-                let object = crate::object::FutureObject(f, PhantomData, PhantomData).pack();
+                let object = crate::object::FutureObject(f, PhantomData, std::sync::atomic::AtomicPtr::default()).pack();
                 let msg = ContextMessage::Instant(InstantMessage::Dynamic(None, object));
 
                 let this = self.tx.clone();
@@ -351,7 +351,7 @@ macro_rules! address_run {
             where
                 F: FnMut(&mut A) -> Pin<Box<dyn Future<Output = ()> $( + $send)* + '_>> + Send + 'static,
             {
-                let object = crate::object::FutureObject(f, PhantomData, PhantomData).pack();
+                let object = crate::object::FutureObject(f, PhantomData, std::sync::atomic::AtomicPtr::default()).pack();
 
                 let msg = ContextMessage::Delayed(DelayedMessage::Dynamic(object, delay));
 
@@ -376,7 +376,7 @@ macro_rules! address_run {
             {
                 let (tx, rx) = oneshot_channel();
 
-                let object = crate::object::FutureObject(f, PhantomData, PhantomData).pack();
+                let object = crate::object::FutureObject(f, PhantomData, std::sync::atomic::AtomicPtr::default()).pack();
 
                 let msg = ContextMessage::Interval(IntervalMessage::Register(tx, object, dur));
 
@@ -388,10 +388,18 @@ macro_rules! address_run {
     };
 }
 
-#[cfg(not(any(feature = "actix-runtime", feature = "actix-runtime-local")))]
+#[cfg(not(any(
+    feature = "actix-runtime",
+    feature = "actix-runtime-mpsc",
+    feature = "actix-runtime-local"
+)))]
 address_run!(Send);
 
-#[cfg(any(feature = "actix-runtime", feature = "actix-runtime-local"))]
+#[cfg(any(
+    feature = "actix-runtime",
+    feature = "actix-runtime-mpsc",
+    feature = "actix-runtime-local"
+))]
 address_run!();
 
 pub struct WeakAddress<A>

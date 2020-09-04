@@ -40,9 +40,17 @@ where
             inner: RefCounter::downgrade(&self.inner),
         }
     }
+
+    pub(crate) async fn send_timeout(&self, msg: M, dur: Duration) -> Result<(), ActixSendError> {
+        let fut = self.send(msg);
+        crate::util::runtime::timeout(dur, fut)
+            .await?
+            .map_err(|_| ActixSendError::Closed)?;
+        Ok(())
+    }
 }
 
-#[cfg(not(feature = "actix-runtime-local"))]
+#[cfg(not(any(feature = "actix-runtime-mpsc", feature = "actix-runtime-local")))]
 impl<M> Sender<M>
 where
     M: 'static,
@@ -57,17 +65,9 @@ where
     pub(crate) fn try_send(&self, msg: M) -> Result<(), ActixSendError> {
         self.inner.try_send(msg).map_err(|_| ActixSendError::Closed)
     }
-
-    pub(crate) async fn send_timeout(&self, msg: M, dur: Duration) -> Result<(), ActixSendError> {
-        let fut = self.inner.send(msg);
-        crate::util::runtime::timeout(dur, fut)
-            .await?
-            .map_err(|_| ActixSendError::Closed)?;
-        Ok(())
-    }
 }
 
-#[cfg(feature = "actix-runtime-local")]
+#[cfg(any(feature = "actix-runtime-mpsc", feature = "actix-runtime-local"))]
 impl<M> Sender<M>
 where
     M: 'static,
@@ -78,10 +78,6 @@ where
 
     pub(crate) fn try_send(&self, msg: M) -> Result<(), ActixSendError> {
         self.inner.send(msg).map_err(|_| ActixSendError::Closed)
-    }
-
-    pub(crate) async fn send_timeout(&self, msg: M, _dur: Duration) -> Result<(), ActixSendError> {
-        self.send(msg).await
     }
 }
 

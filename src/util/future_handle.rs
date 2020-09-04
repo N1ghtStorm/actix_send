@@ -47,10 +47,18 @@ macro_rules! spawn_cancel {
     };
 }
 
-#[cfg(not(any(feature = "actix-runtime", feature = "actix-runtime-local")))]
+#[cfg(not(any(
+    feature = "actix-runtime",
+    feature = "actix-runtime-mpsc",
+    feature = "actix-runtime-local"
+)))]
 spawn_cancel!(Send);
 
-#[cfg(any(feature = "actix-runtime", feature = "actix-runtime-local"))]
+#[cfg(any(
+    feature = "actix-runtime",
+    feature = "actix-runtime-mpsc",
+    feature = "actix-runtime-local"
+))]
 spawn_cancel!();
 
 // a future notified and polled by future_handler.

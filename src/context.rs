@@ -40,13 +40,13 @@ where
         id: usize,
         tx: WeakSender<ContextMessage<A>>,
         rx: Receiver<ContextMessage<A>>,
-        rx_sub: Option<Receiver<ContextMessage<A>>>,
+        broadcast_receiver: Option<Receiver<ContextMessage<A>>>,
         actor: A,
         state: ActorState<A>,
     ) -> Self {
         // When rx_sub is Some we take both rx and rx_sub and construct selector field.
-        let (rx, selector) = match rx_sub {
-            Some(rx_sub) => (None, Some(select(rx, rx_sub))),
+        let (rx, selector) = match broadcast_receiver {
+            Some(broadcast_receiver) => (None, Some(select(rx, broadcast_receiver))),
             None => (Some(rx), None),
         };
 

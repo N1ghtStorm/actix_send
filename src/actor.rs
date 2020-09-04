@@ -4,12 +4,17 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use core::time::Duration;
 
 use crate::builder::{Builder, BuilderFnContainer, Config};
+use crate::context::ContextMessage;
 use crate::interval::IntervalFutureSet;
+use crate::receiver::Receiver;
+use crate::sender::Sender;
 use crate::util::{
+    channel::bounded,
     future_handle::FutureHandler,
     smart_pointer::{Lock, RefCounter},
 };
 
+#[cfg(not(feature = "actix-runtime-mpsc"))]
 macro_rules! actor {
     ($($send:ident)*) => {
         pub trait Actor
@@ -52,10 +57,49 @@ macro_rules! actor {
     }
 }
 
-#[cfg(not(feature = "actix-runtime-local"))]
+#[cfg(not(any(feature = "actix-runtime-mpsc", feature = "actix-runtime-local")))]
 actor!(Send);
 #[cfg(feature = "actix-runtime-local")]
 actor!();
+
+#[cfg(feature = "actix-runtime-mpsc")]
+pub trait Actor
+where
+    Self: Sized,
+{
+    type Message: Send;
+    type Result: Send;
+
+    /// define a new builder for an new set of actor(s) with the async closure.
+    fn builder<F, Fut>(f: F) -> Builder<Self>
+    where
+        F: Fn() -> Fut + 'static,
+        Fut: Future<Output = Self> + Send + 'static,
+    {
+        Builder {
+            actor_builder: BuilderFnContainer::new(f),
+            config: Default::default(),
+        }
+    }
+
+    /// Called when actor starts.
+    ///
+    /// *. This would apply to every single instance of actor(s)
+    ///
+    /// *. This would apply to restart process if `Builder::restart_on_err` is set to true
+    #[allow(unused_variables)]
+    fn on_start(&mut self) -> Pin<Box<dyn Future<Output = ()> + '_>> {
+        Box::pin(async {})
+    }
+
+    /// Called before actor stop. Actor's context would be passed as argument.
+    ///
+    /// *. This would apply to every single instance of actor(s)
+    #[allow(unused_variables)]
+    fn on_stop(&mut self) -> Pin<Box<dyn Future<Output = ()> + '_>> {
+        Box::pin(async {})
+    }
+}
 
 // a marker bit for lower bit of usize. can be used to notify if address is dropping.
 const MARKER: usize = 1;
@@ -102,6 +146,23 @@ where
             handlers: RefCounter::new(Lock::new(Vec::new())),
             interval_futures: Default::default(),
             config,
+        }
+    }
+
+    pub(crate) fn broadcast_receiver(
+        &self,
+        broadcast_senders: &mut Vec<Sender<ContextMessage<A>>>,
+        num: usize,
+    ) -> Option<Receiver<ContextMessage<A>>> {
+        match self.allow_broadcast() {
+            true => {
+                let (tx_broadcast, rx_broadcast) = bounded::<ContextMessage<A>>(num);
+
+                broadcast_senders.push(Sender::from(tx_broadcast));
+
+                Some(rx_broadcast.into())
+            }
+            false => None,
         }
     }
 
@@ -183,7 +244,7 @@ where
     }
 }
 
-#[cfg(not(feature = "actix-runtime-local"))]
+#[cfg(not(any(feature = "actix-runtime-mpsc", feature = "actix-runtime-local")))]
 #[async_trait::async_trait]
 pub trait Handler
 where
@@ -192,7 +253,7 @@ where
     async fn handle(&mut self, msg: Self::Message) -> Self::Result;
 }
 
-#[cfg(feature = "actix-runtime-local")]
+#[cfg(any(feature = "actix-runtime-mpsc", feature = "actix-runtime-local"))]
 #[async_trait::async_trait(?Send)]
 pub trait Handler
 where

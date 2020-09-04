@@ -10,23 +10,13 @@ use core::pin::Pin;
 
 use crate::actor::Actor;
 
-macro_rules! object_container {
-    ($($send:ident)*) => {
-        // a container for FutureTrait object
-        pub(crate) struct FutureObjectContainer<A>
-        where
-            A: Actor,
-        {
-            func: Box<dyn FutureTrait<A> $( + $send)*>,
-        }
-    }
+// a container for FutureTrait object
+pub(crate) struct FutureObjectContainer<A>
+where
+    A: Actor,
+{
+    func: Box<dyn FutureTrait<A> + Send>,
 }
-
-#[cfg(not(feature = "actix-runtime-local"))]
-object_container!(Send);
-
-#[cfg(feature = "actix-runtime-local")]
-object_container!();
 
 macro_rules! object {
     ($($send:ident)*) => {
@@ -60,7 +50,7 @@ macro_rules! object {
         pub(crate) struct FutureObject<A, F, R>(
             pub(crate) F,
             pub(crate) PhantomData<R>,
-            pub(crate) PhantomData<A>,
+            pub(crate) std::sync::atomic::AtomicPtr<A>,
         )
         where
             A: Actor + 'static,
@@ -100,10 +90,18 @@ macro_rules! object {
     };
 }
 
-#[cfg(not(any(feature = "actix-runtime", feature = "actix-runtime-local")))]
+#[cfg(not(any(
+    feature = "actix-runtime",
+    feature = "actix-runtime-mpsc",
+    feature = "actix-runtime-local"
+)))]
 object!(Send);
 
-#[cfg(any(feature = "actix-runtime", feature = "actix-runtime-local"))]
+#[cfg(any(
+    feature = "actix-runtime",
+    feature = "actix-runtime-mpsc",
+    feature = "actix-runtime-local"
+))]
 object!();
 
 // A container type for packing and unpacking a type to/from a Any trait object
