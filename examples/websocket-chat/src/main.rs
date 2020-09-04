@@ -167,7 +167,7 @@ async fn main() -> std::io::Result<()> {
                     .timeout(CLIENT_TIMEOUT)
                     .heartbeat(HEARTBEAT_INTERVAL)
                     // remove this to enable proper heartbeat.
-                    .disable_heartbeat()
+                    // .disable_heartbeat()
                     .to(chat_route)
                     .on_call(on_call)
                     .on_stop(on_stop),

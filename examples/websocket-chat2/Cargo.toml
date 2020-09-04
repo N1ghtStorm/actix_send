@@ -1,11 +1,11 @@
 [package]
-name = "websocket-example"
-version = "2.0.0"
-authors = ["Nikolay Kim <fafhrd91@gmail.com>"]
+name = "websocket-chat2"
+version = "0.1.0"
+authors = ["fakeshadow <24548779@qq.com>"]
 edition = "2018"
 
 [[bin]]
-name = "websocket-chat"
+name = "websocket-chat2"
 path = "src/main.rs"
 
 [dependencies]
@@ -13,4 +13,5 @@ actix-web = "3.0.0-beta.3"
 actix-files = "0.3.0-beta.1"
 actix_send_websocket = { path = "../../actix_send_websocket" }
 futures-channel = { version = "0.3.5", default-features = false }
+futures-util = { version = "0.3.5", default-features = false }
 rand = "0.7.3"

@@ -2322,6 +2322,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "websocket-chat2"
+version = "0.1.0"
+dependencies = [
+ "actix-files",
+ "actix-web",
+ "actix_send_websocket",
+ "futures-channel",
+ "futures-util",
+ "rand",
+]
+
+[[package]]
 name = "websocket-example"
 version = "2.0.0"
 dependencies = [

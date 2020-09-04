@@ -72,13 +72,14 @@ use actix_service::{
 };
 use actix_web::{
     dev::{
-        AppService, HttpResponseBuilder, HttpServiceFactory, ResourceDef, ServiceRequest,
+        AppService, HttpResponseBuilder, HttpServiceFactory, Payload, ResourceDef, ServiceRequest,
         ServiceResponse,
     },
     error::{Error, PayloadError},
     http::{header, Method, StatusCode},
+    web,
     web::{Bytes, BytesMut},
-    HttpRequest, HttpResponse,
+    FromRequest, HttpRequest, HttpResponse,
 };
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use futures_util::{
@@ -280,8 +281,10 @@ impl DecodeStreamManager {
                         break;
                     }
                     if !this.check_hb() {
+                        println!("breaking hb");
                         break;
                     }
+                    println!("running hb");
                 }
             });
         }
@@ -756,6 +759,289 @@ where
                 Poll::Ready(None) => return Poll::Ready(None),
                 Poll::Ready(Some(Ok(None))) => continue,
             }
+        }
+    }
+}
+
+impl FromRequest for WebSocketStream {
+    type Error = Error;
+    type Future = Ready<Result<Self, Self::Error>>;
+    type Config = WsConfig;
+
+    fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
+        let mut res = match handshake(&req) {
+            Ok(res) => res,
+            Err(e) => return err(e.into()),
+        };
+        let cfg = Self::Config::from_req(req);
+        let stream = payload.take();
+
+        let (tx, rx) = futures_channel::mpsc::unbounded();
+
+        let manager = DecodeStreamManager2::new(cfg.heartbeat, cfg.timeout, tx.clone()).start();
+        let codec = cfg.codec.unwrap_or_else(Codec::new);
+
+        let decode = DecodeStream2 {
+            manager,
+            stream,
+            codec,
+            buf: Default::default(),
+        };
+
+        let encode = EncodeStream2 {
+            rx,
+            codec,
+            buf: Default::default(),
+        };
+
+        let response = res.streaming(encode);
+
+        ok(WebSocketStream {
+            tx,
+            decode,
+            response,
+        })
+    }
+}
+
+pub struct WebSocketStream {
+    tx: UnboundedSender<Message>,
+    decode: DecodeStream2,
+    response: HttpResponse,
+}
+
+impl WebSocketStream {
+    pub fn into_parts(self) -> (DecodeStream2, HttpResponse, UnboundedSender<Message>) {
+        (self.decode, self.response, self.tx)
+    }
+}
+
+// decode incoming stream. eg: actix_web::web::Payload to a websocket Message.
+#[pin_project]
+pub struct DecodeStream2 {
+    manager: DecodeStreamManager2,
+    #[pin]
+    stream: Payload,
+    codec: Codec,
+    buf: BytesMut,
+}
+
+impl Stream for DecodeStream2 {
+    // Decode error is packed with websocket Message and return as a Result.
+    type Item = Result<Message, ProtocolError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let mut this = self.as_mut().project();
+
+        if !this.manager.is_closed() {
+            loop {
+                this = self.as_mut().project();
+                match Pin::new(&mut this.stream).poll_next(cx) {
+                    Poll::Ready(Some(Ok(chunk))) => {
+                        this.buf.extend_from_slice(&chunk[..]);
+                    }
+                    Poll::Ready(None) => {
+                        this.manager.set_close();
+                        break;
+                    }
+                    Poll::Pending => break,
+                    Poll::Ready(Some(Err(e))) => {
+                        return Poll::Ready(Some(Err(ProtocolError::Io(io::Error::new(
+                            io::ErrorKind::Other,
+                            format!("{}", e),
+                        )))));
+                    }
+                }
+            }
+        }
+
+        match this.codec.decode(this.buf)? {
+            None => {
+                if this.manager.is_closed() {
+                    Poll::Ready(None)
+                } else {
+                    Poll::Pending
+                }
+            }
+            Some(frm) => {
+                let msg = match frm {
+                    Frame::Text(data) => Message::Text(
+                        std::str::from_utf8(&data)
+                            .map_err(|e| {
+                                ProtocolError::Io(io::Error::new(
+                                    io::ErrorKind::Other,
+                                    format!("{}", e),
+                                ))
+                            })?
+                            .to_string(),
+                    ),
+                    Frame::Binary(data) => Message::Binary(data),
+                    Frame::Ping(s) => {
+                        // decode stream manager would handle ping message and close the connection
+                        // if client failed to maintain heartbeat.
+                        if this.manager.check_hb() {
+                            Message::Ping(s)
+                        } else {
+                            Message::Close(Some(CloseCode::Normal.into()))
+                        }
+                    }
+                    Frame::Pong(s) => Message::Pong(s),
+                    Frame::Close(reason) => Message::Close(reason),
+                    Frame::Continuation(item) => Message::Continuation(item),
+                };
+                Poll::Ready(Some(Ok(msg)))
+            }
+        }
+    }
+}
+
+struct EncodeStream2 {
+    rx: UnboundedReceiver<Message>,
+    codec: Codec,
+    buf: BytesMut,
+}
+
+impl Stream for EncodeStream2 {
+    type Item = Result<Bytes, Error>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+
+        match Pin::new(&mut this.rx).poll_next(cx) {
+            Poll::Ready(Some(msg)) => match this.codec.encode(msg, &mut this.buf) {
+                Ok(()) => Poll::Ready(Some(Ok(this.buf.split().freeze()))),
+                Err(e) => Poll::Ready(Some(Err(e.into()))),
+            },
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct WsConfig {
+    codec: Option<Codec>,
+    heartbeat: Option<Duration>,
+    timeout: Duration,
+}
+
+impl WsConfig {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn codec(mut self, codec: Codec) -> Self {
+        self.codec = Some(codec);
+        self
+    }
+
+    /// Set the heartbeat interval.
+    pub fn heartbeat(mut self, dur: Duration) -> Self {
+        self.heartbeat = Some(dur);
+        self
+    }
+
+    /// Set the timeout duration for client does not send Ping for too long.
+    pub fn timeout(mut self, dur: Duration) -> Self {
+        self.timeout = dur;
+        self
+    }
+
+    /// Disable heartbeat check.
+    pub fn disable_heartbeat(mut self) -> Self {
+        self.heartbeat = None;
+        self
+    }
+
+    /// Extract WsConfig config from app data. Check both `T` and `Data<T>`, in that order, and fall
+    /// back to the default payload config.
+    fn from_req(req: &HttpRequest) -> &Self {
+        req.app_data::<Self>()
+            .or_else(|| req.app_data::<web::Data<Self>>().map(|d| d.as_ref()))
+            .unwrap_or_else(|| &DEFAULT_CONFIG)
+    }
+}
+
+// Allow shared refs to default.
+const DEFAULT_CONFIG: WsConfig = WsConfig {
+    codec: None,
+    heartbeat: Some(Duration::from_secs(5)),
+    timeout: Duration::from_secs(10),
+};
+
+impl Default for WsConfig {
+    fn default() -> Self {
+        Self {
+            codec: None,
+            heartbeat: Some(Duration::from_secs(5)),
+            timeout: Duration::from_secs(10),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct DecodeStreamManager2 {
+    enable_heartbeat: bool,
+    close_flag: Rc<RefCell<bool>>,
+    interval: Option<Duration>,
+    timeout: Duration,
+    heartbeat: Rc<RefCell<Instant>>,
+    tx: UnboundedSender<Message>,
+}
+
+impl DecodeStreamManager2 {
+    fn new(interval: Option<Duration>, timeout: Duration, tx: UnboundedSender<Message>) -> Self {
+        Self {
+            enable_heartbeat: interval.is_some(),
+            close_flag: Rc::new(RefCell::new(false)),
+            interval,
+            timeout,
+            heartbeat: Rc::new(RefCell::new(Instant::now())),
+            tx,
+        }
+    }
+
+    fn start(self) -> Self {
+        if let Some(interval) = self.interval {
+            let this = self.clone();
+            actix_web::rt::spawn(async move {
+                loop {
+                    actix_web::rt::time::delay_for(interval).await;
+                    if Rc::strong_count(&this.close_flag) == 1 {
+                        break;
+                    }
+                    if !this.check_hb() {
+                        println!("breaking hb");
+                        break;
+                    }
+                    println!("running hb");
+                }
+            });
+        }
+
+        self
+    }
+
+    fn set_close(&self) {
+        *self.close_flag.borrow_mut() = true;
+    }
+
+    fn is_closed(&self) -> bool {
+        *self.close_flag.borrow()
+    }
+
+    fn check_hb(&self) -> bool {
+        if !self.enable_heartbeat {
+            return true;
+        }
+        let now = Instant::now();
+        let heartbeat = self.heartbeat.borrow();
+        if now.duration_since(*heartbeat) > self.timeout {
+            self.set_close();
+            let _ = self.tx.unbounded_send(Message::Close(None));
+            false
+        } else {
+            true
         }
     }
 }
