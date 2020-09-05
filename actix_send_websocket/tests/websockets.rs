@@ -90,7 +90,6 @@ async fn test_heartbeat() {
 
     actix_rt::time::delay_for(Duration::from_secs(2)).await;
 
-    framed.send(Message::Ping("text".into())).await.unwrap();
     let item = framed.next().await.unwrap().unwrap();
     assert_eq!(item, Frame::Close(Some(CloseCode::Normal.into())));
 

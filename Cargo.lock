@@ -376,7 +376,7 @@ dependencies = [
 [[package]]
 name = "actix_send_macros"
 version = "0.1.0"
-source = "git+https://github.com/fakeshadow/actix_send.git#7beb2de1f38d5366229f1957848d5b412549bffe"
+source = "git+https://github.com/fakeshadow/actix_send.git#d1f88e35b67d84ae3a9c63085bf20a5a038fb19c"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -395,11 +395,10 @@ dependencies = [
 [[package]]
 name = "actix_send_websocket"
 version = "0.1.0"
-source = "git+https://github.com/fakeshadow/actix_send.git#b43ae47fa75fd3a33f7038d710459322696958ea"
+source = "git+https://github.com/fakeshadow/actix_send.git#d1f88e35b67d84ae3a9c63085bf20a5a038fb19c"
 dependencies = [
  "actix-codec 0.2.0",
  "actix-http",
- "actix-service",
  "actix-web",
  "futures-channel",
  "futures-util",
@@ -462,9 +461,9 @@ dependencies = [
 
 [[package]]
 name = "async-channel"
-version = "1.4.1"
+version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59386c3aa61f4e14c4ddda1a6744c119b4bf278ec9f866d3c20bc5728ee0eb97"
+checksum = "21279cfaa4f47df10b1816007e738ca3747ef2ee53ffc51cdbf57a8bb266fee3"
 dependencies = [
  "concurrent-queue",
  "event-listener",
@@ -1604,9 +1603,9 @@ checksum = "eba180dafb9038b050a4c280019bbedf9f2467b61e5d892dcad585bb57aadc5a"
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.19"
+version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04f5f085b5d71e2188cb8271e5da0161ad52c3f227a661a3c135fdf28e258b12"
+checksum = "175c513d55719db99da20232b06cda8bab6b83ec2d04e3283edf0213c37c1a29"
 dependencies = [
  "unicode-xid",
 ]

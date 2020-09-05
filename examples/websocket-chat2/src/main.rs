@@ -1,11 +1,11 @@
 use std::time::Duration;
 
 use actix_files as fs;
-use actix_send_websocket::{CloseCode, Message, WebSocketStream, WsConfig};
+use actix_send_websocket::{CloseCode, Message, WebSocket, WsConfig};
 use actix_web::{
     get,
     web::{self, Data},
-    App, HttpRequest, HttpResponse, HttpServer, Responder,
+    App, HttpResponse, HttpServer, Responder,
 };
 use futures_util::StreamExt;
 
@@ -30,7 +30,7 @@ pub struct WsChatSession {
 
 /// Entry point for our route
 #[get("/ws/")]
-async fn chat_route(server: Data<SharedChatServer>, websocket: WebSocketStream) -> impl Responder {
+async fn chat_route(server: Data<SharedChatServer>, websocket: WebSocket) -> impl Responder {
     // stream is the async iterator for incoming websocket messages.
     // res is the response to client.
     // tx is the sender to add message to response.
@@ -110,7 +110,12 @@ async fn chat_route(server: Data<SharedChatServer>, websocket: WebSocketStream) 
                     println!("Unexpected binary");
                     None
                 }
-                Message::Close(_) => break,
+                Message::Close(reason) => {
+                    // close could either be sent by the client or the built in heartbeat manager.
+                    // so we should echo the message to client and then end the stream.
+                    let _ = tx.unbounded_send(Message::Close(reason));
+                    break;
+                }
                 Message::Continuation(_) => Some(vec![Message::Close(None)]),
                 Message::Nop => None,
             };

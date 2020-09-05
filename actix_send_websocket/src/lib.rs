@@ -15,15 +15,16 @@
 //!
 //!     // spawn the stream handling so we don't block the response to client.
 //!     actix_web::rt::spawn(async move {
-//!         let mut should_end = false;
 //!         while let Some(Ok(msg)) = stream.next().await {
 //!             let msg = match msg {
 //!                 // we echo text message and ping message to client.
 //!                 Message::Text(string) => Some(Message::Text(string)),
 //!                 Message::Ping(bytes) => Some(Message::Pong(bytes)),
 //!                 Message::Close(reason) => {
-//!                     should_end = true;
-//!                     Some(Message::Close(reason))
+//!                     let _ = tx.send(Message::Close(reason)).await;
+//!                     // force end the stream when we have a close message.
+//!                     // this message can either from the client or background heartbeat manager.
+//!                     break;
 //!                 }
 //!                 // other types of message would be ignored
 //!                 _ => None,
@@ -33,10 +34,7 @@
 //!                 if tx.send(msg).await.is_err() {
 //!                     break;
 //!                 };  
-//!             }    
-//!             if should_end {
-//!                 break;
-//!             }       
+//!             }
 //!         }   
 //!     });
 //!
