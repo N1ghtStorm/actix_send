@@ -16,24 +16,22 @@
 //!     // spawn the stream handling so we don't block the response to client.
 //!     actix_web::rt::spawn(async move {
 //!         while let Some(Ok(msg)) = stream.next().await {
-//!             let msg = match msg {
+//!             let result = match msg {
 //!                 // we echo text message and ping message to client.
-//!                 Message::Text(string) => Some(Message::Text(string)),
-//!                 Message::Ping(bytes) => Some(Message::Pong(bytes)),
+//!                 Message::Text(string) => tx.text(string).await,
+//!                 Message::Ping(bytes) => tx.pong(&bytes).await,
 //!                 Message::Close(reason) => {
-//!                     let _ = tx.send(Message::Close(reason)).await;
+//!                     let _ = tx.close(reason).await;
 //!                     // force end the stream when we have a close message.
 //!                     // this message can either from the client or background heartbeat manager.
 //!                     break;
 //!                 }
 //!                 // other types of message would be ignored
-//!                 _ => None,
+//!                 _ => Ok(()),
 //!             };
-//!             if let Some(msg) = msg {
-//!                 // use the tx to send return message to client.
-//!                 if tx.send(msg).await.is_err() {
-//!                     break;
-//!                 };  
+//!             if result.is_err() {
+//!                 // end the stream when the response is gone.
+//!                 break;
 //!             }
 //!         }   
 //!     });
@@ -75,10 +73,11 @@ use actix_web::{
     web::{Bytes, BytesMut},
     FromRequest, HttpRequest, HttpResponse,
 };
-use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender};
+use futures_channel::mpsc::{TrySendError, UnboundedReceiver, UnboundedSender};
 use futures_util::{
     future::{err, ok, Ready},
     stream::Stream,
+    SinkExt,
 };
 use pin_project::pin_project;
 
@@ -159,14 +158,10 @@ impl Default for WsConfig {
 }
 
 /// extractor type for websocket.
-pub struct WebSocket(
-    pub DecodeStream,
-    pub HttpResponse,
-    pub UnboundedSender<Message>,
-);
+pub struct WebSocket(pub DecodeStream, pub HttpResponse, pub WebSocketSender);
 
 impl WebSocket {
-    pub fn into_parts(self) -> (DecodeStream, HttpResponse, UnboundedSender<Message>) {
+    pub fn into_parts(self) -> (DecodeStream, HttpResponse, WebSocketSender) {
         (self.0, self.1, self.2)
     }
 }
@@ -185,6 +180,7 @@ impl FromRequest for WebSocket {
         let stream = payload.take();
 
         let (tx, rx) = futures_channel::mpsc::unbounded();
+        let tx = WebSocketSender(tx);
 
         let manager = DecodeStreamManager::new(cfg.heartbeat, cfg.timeout, tx.clone()).start();
         let codec = cfg.codec.unwrap_or_else(Codec::new);
@@ -317,11 +313,11 @@ struct DecodeStreamManager {
     interval: Option<Duration>,
     timeout: Duration,
     heartbeat: Rc<RefCell<Instant>>,
-    tx: UnboundedSender<Message>,
+    tx: WebSocketSender,
 }
 
 impl DecodeStreamManager {
-    fn new(interval: Option<Duration>, timeout: Duration, tx: UnboundedSender<Message>) -> Self {
+    fn new(interval: Option<Duration>, timeout: Duration, tx: WebSocketSender) -> Self {
         Self {
             enable_heartbeat: interval.is_some(),
             close_flag: Rc::new(RefCell::new(false)),
@@ -369,11 +365,71 @@ impl DecodeStreamManager {
             self.set_close();
             let _ = self
                 .tx
-                .unbounded_send(Message::Close(Some(CloseCode::Normal.into())));
+                .try_send(Message::Close(Some(CloseCode::Normal.into())));
             false
         } else {
             true
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct WebSocketSender(UnboundedSender<Message>);
+
+impl WebSocketSender {
+    /// send the message asynchronously.
+    pub async fn send(&mut self, message: Message) -> Result<(), Error> {
+        self.0
+            .send(message)
+            .await
+            .map_err(actix_web::error::ErrorInternalServerError)
+    }
+
+    /// send the message synchronously. The send would fail only when the receive part is closed.
+    ///
+    /// The returned Error type is `futures_channel::mpsc::TrySendError`.
+    ///
+    /// *. It's suggested call `into_inner` and get the message that failed to sent instead  of
+    /// importing the error type from said crate.
+    pub fn try_send(&self, message: Message) -> Result<(), TrySendError<Message>> {
+        self.0.unbounded_send(message)
+    }
+
+    #[deprecated(note = "please use try_send instead")]
+    pub fn unbounded_send(&self, message: Message) -> Result<(), TrySendError<Message>> {
+        self.try_send(message)
+    }
+
+    /// Send text frame
+    #[inline]
+    pub async fn text(&mut self, text: impl Into<String>) -> Result<(), Error> {
+        self.send(Message::Text(text.into())).await
+    }
+
+    /// Send binary frame
+    #[inline]
+    pub async fn binary(&mut self, data: impl Into<Bytes>) -> Result<(), Error> {
+        self.send(Message::Binary(data.into())).await
+    }
+
+    /// Send ping frame
+    #[inline]
+    pub async fn ping(&mut self, message: &[u8]) -> Result<(), Error> {
+        self.send(Message::Ping(Bytes::copy_from_slice(message)))
+            .await
+    }
+
+    /// Send pong frame
+    #[inline]
+    pub async fn pong(&mut self, message: &[u8]) -> Result<(), Error> {
+        self.send(Message::Pong(Bytes::copy_from_slice(message)))
+            .await
+    }
+
+    /// Send close frame
+    #[inline]
+    pub async fn close(&mut self, reason: Option<CloseReason>) -> Result<(), Error> {
+        self.send(Message::Close(reason)).await
     }
 }
 

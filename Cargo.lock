@@ -395,19 +395,6 @@ dependencies = [
 [[package]]
 name = "actix_send_websocket"
 version = "0.1.0"
-source = "git+https://github.com/fakeshadow/actix_send.git#d1f88e35b67d84ae3a9c63085bf20a5a038fb19c"
-dependencies = [
- "actix-codec 0.2.0",
- "actix-http",
- "actix-web",
- "futures-channel",
- "futures-util",
- "pin-project",
-]
-
-[[package]]
-name = "actix_send_websocket"
-version = "0.1.0"
 dependencies = [
  "actix",
  "actix-codec 0.2.0",
@@ -2341,7 +2328,7 @@ version = "0.1.0"
 dependencies = [
  "actix-files",
  "actix-web",
- "actix_send_websocket 0.1.0 (git+https://github.com/fakeshadow/actix_send.git)",
+ "actix_send_websocket",
  "futures-channel",
  "futures-util",
  "rand",

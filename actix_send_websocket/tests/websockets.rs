@@ -7,26 +7,19 @@ use futures_util::{SinkExt, StreamExt};
 #[get("/")]
 async fn handler(WebSocket(mut stream, res, mut tx): WebSocket) -> impl Responder {
     actix_web::rt::spawn(async move {
-        let mut should_end = false;
         while let Some(Ok(msg)) = stream.next().await {
-            let msg = match msg {
-                Message::Text(str) => Some(Message::Text(str)),
-                Message::Binary(bytes) => Some(Message::Binary(bytes)),
-                Message::Ping(bytes) => Some(Message::Pong(bytes)),
+            let result = match msg {
+                Message::Text(str) => tx.text(str).await,
+                Message::Binary(bytes) => tx.binary(bytes).await,
+                Message::Ping(bytes) => tx.pong(&bytes).await,
                 Message::Close(reason) => {
-                    should_end = true;
-                    Some(Message::Close(reason))
-                }
-                _ => None,
-            };
-
-            if let Some(msg) = msg {
-                if tx.send(msg).await.is_err() {
+                    let _ = tx.close(reason).await;
                     break;
                 }
-            }
+                _ => Ok(()),
+            };
 
-            if should_end {
+            if result.is_err() {
                 break;
             }
         }

@@ -1,13 +1,12 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use actix_send_websocket::Message;
-use futures_channel::mpsc::UnboundedSender;
+use actix_send_websocket::{Message, WebSocketSender};
 
 /// `ChatServer` manages chat rooms and responsible for coordinating chat
 /// session. implementation is super primitive
 pub struct ChatServer {
-    sessions: HashMap<usize, UnboundedSender<Message>>,
+    sessions: HashMap<usize, WebSocketSender>,
     rooms: HashMap<String, HashSet<usize>>,
 }
 
@@ -40,15 +39,14 @@ impl ChatServer {
             for id in sessions {
                 if *id != skip_id {
                     if let Some(addr) = self.sessions.get(id) {
-                        let res = addr.unbounded_send(Message::Text(message.to_owned()));
-                        assert!(res.is_ok());
+                        let _ = addr.try_send(Message::Text(message.to_owned()));
                     }
                 }
             }
         }
     }
 
-    pub fn connect(&mut self, id: usize, tx: UnboundedSender<Message>) {
+    pub fn connect(&mut self, id: usize, tx: WebSocketSender) {
         println!("Someone joined");
 
         // notify all users in same room

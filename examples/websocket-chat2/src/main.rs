@@ -34,7 +34,7 @@ async fn chat_route(server: Data<SharedChatServer>, websocket: WebSocket) -> imp
     // stream is the async iterator for incoming websocket messages.
     // res is the response to client.
     // tx is the sender to add message to response.
-    let (mut stream, res, tx) = websocket.into_parts();
+    let (mut stream, res, mut tx) = websocket.into_parts();
 
     // construct a session.
     let mut session = WsChatSession {
@@ -53,8 +53,8 @@ async fn chat_route(server: Data<SharedChatServer>, websocket: WebSocket) -> imp
             let msg = res.unwrap_or_else(|_| Message::Close(Some(CloseCode::Protocol.into())));
 
             let res = match msg {
-                Message::Ping(msg) => Some(vec![Message::Pong(msg)]),
-                Message::Pong(_) => None,
+                Message::Ping(msg) => tx.pong(&msg).await,
+                Message::Pong(_) => Ok(()),
                 Message::Text(text) => {
                     let m = text.trim();
                     // we check for /sss type of messages
@@ -69,28 +69,39 @@ async fn chat_route(server: Data<SharedChatServer>, websocket: WebSocket) -> imp
                                     .get()
                                     .list_rooms()
                                     .into_iter()
-                                    .map(|s| Message::Text(s.into()))
-                                    .collect();
-                                Some(rooms)
+                                    .map(|text| text.into())
+                                    .collect::<Vec<String>>();
+
+                                for room in rooms.into_iter() {
+                                    if tx.text(room).await.is_err() {
+                                        break;
+                                    }
+                                }
+
+                                Ok(())
                             }
                             "/join" => {
-                                if v.len() == 2 {
+                                let text = if v.len() == 2 {
                                     server.get().join(session.id, &session.room);
-                                    Some(vec![Message::Text("joined".into())])
+                                    "joined"
                                 } else {
-                                    Some(vec![Message::Text("!!! room name is required".into())])
-                                }
+                                    "!!! room name is required"
+                                };
+
+                                tx.text(text).await
                             }
                             "/name" => {
-                                if v.len() == 2 {
+                                let msg = if v.len() == 2 {
                                     session.name = Some(v[1].to_owned());
 
-                                    Some(vec![Message::Text(format!("new name is {}", v[1]))])
+                                    format!("new name is {}", v[1])
                                 } else {
-                                    Some(vec![Message::Text("!!! name is required".into())])
-                                }
+                                    "!!! name is required".into()
+                                };
+
+                                tx.text(msg).await
                             }
-                            _ => Some(vec![Message::Text(format!("!!! unknown command: {:?}", m))]),
+                            _ => tx.text(format!("!!! unknown command: {:?}", m)).await,
                         }
                     } else {
                         let msg = if let Some(ref name) = session.name {
@@ -103,27 +114,28 @@ async fn chat_route(server: Data<SharedChatServer>, websocket: WebSocket) -> imp
                             .get()
                             .send_message(&session.room, msg.as_str(), session.id);
 
-                        None
+                        Ok(())
                     }
                 }
                 Message::Binary(_) => {
                     println!("Unexpected binary");
-                    None
+                    Ok(())
                 }
                 Message::Close(reason) => {
                     // close could either be sent by the client or the built in heartbeat manager.
                     // so we should echo the message to client and then end the stream.
-                    let _ = tx.unbounded_send(Message::Close(reason));
+                    let _ = tx.close(reason).await;
                     break;
                 }
-                Message::Continuation(_) => Some(vec![Message::Close(None)]),
-                Message::Nop => None,
+                Message::Continuation(_) => {
+                    let _ = tx.close(None).await;
+                    break;
+                }
+                Message::Nop => Ok(()),
             };
 
-            if let Some(msg) = res {
-                for msg in msg.into_iter() {
-                    let _ = tx.unbounded_send(msg);
-                }
+            if res.is_err() {
+                break;
             }
         }
 
