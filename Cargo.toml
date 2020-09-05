@@ -14,7 +14,6 @@ path = "src/lib.rs"
 members = [
     "actix-send-macros",
     "actix_send_websocket",
-    "examples/websocket-chat",
     "examples/websocket-chat2"
 ]
 

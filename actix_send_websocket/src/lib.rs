@@ -2,46 +2,50 @@
 //!
 //! # Example:
 //! ```rust,no_run
-//! use actix_web::{App, Error, HttpRequest, HttpServer};
-//! use actix_send_websocket::{Message, ProtocolError, WebSockets};
-//! use futures_channel::mpsc::UnboundedSender;
+//! use actix_web::{get, App, Error, HttpRequest, HttpServer, Responder};
+//! use actix_send_websocket::{Message, WebSocketStream};
+//! use futures_util::{SinkExt, StreamExt};
 //!
-//! // the websocket message handler. incoming message are from the client and return optional
-//! // message to client.
-//! async fn ws(req: HttpRequest, message: Result<Message, ProtocolError>) -> Result<Option<Vec<Message>>, Error> {
-//!     let message = message.unwrap_or(Message::Close(None));
-//!     match message {
-//!         // we echo text message and ping message to client.
-//!         Message::Text(string) => Ok(Some(vec![Message::Text(string)])),
-//!         Message::Ping(bytes) => Ok(Some(vec![Message::Pong(bytes)])),
-//!         Message::Close(reason) => Ok(Some(vec![Message::Close(reason)])),
-//!         // other types of message would be ignored
-//!         _ => Ok(None),
-//!     }   
-//! }
+//! #[get("/")]
+//! async fn ws(ws: WebSocketStream) -> impl Responder {
+//!     // stream is the async iterator of incoming client websocket messages.
+//!     // res is the response we return to client.
+//!     // tx is a sender to push new websocket message to client response.
+//!     let (mut stream, res, mut tx) = ws.into_parts();
 //!
-//! // this would called before the websocket service is called.
-//! // it gives access to the request and a sender that can send message directly to the
-//! // client.
-//! async fn on_call(req: HttpRequest, tx: UnboundedSender<Message>) -> Result<(), Error> {
-//!     Ok(())
-//! }
+//!     // spawn the stream handling so we don't block the response to client.
+//!     actix_web::rt::spawn(async move {
+//!         let mut should_end = false;
+//!         while let Some(Ok(msg)) = stream.next().await {
+//!             let msg = match msg {
+//!                 // we echo text message and ping message to client.
+//!                 Message::Text(string) => Some(Message::Text(string)),
+//!                 Message::Ping(bytes) => Some(Message::Pong(bytes)),
+//!                 Message::Close(reason) => {
+//!                     should_end = true;
+//!                     Some(Message::Close(reason))
+//!                 },
+//!                 // other types of message would be ignored
+//!                 _ => None,
+//!             };
+//!             if let Some(msg) = msg {
+//!                 // use the tx to send return message to client.
+//!                 if tx.send(msg).await.is_err() {
+//!                     break;
+//!                 };  
+//!             }    
+//!             if should_end {
+//!                 break;
+//!             }       
+//!         }   
+//!     });
 //!
-//! // this would called when a websocket connection is closing.
-//! fn on_stop(req: &HttpRequest) {
+//!     res
 //! }
 //!
 //! #[actix_web::main]
 //! async fn main() -> std::io::Result<()> {
-//!     HttpServer::new(||
-//!         App::new()
-//!             .service(
-//!                 WebSockets::new("/")
-//!                     .to(ws)
-//!                     .on_call(on_call)
-//!                     .on_stop(on_stop)
-//!             )
-//!     )
+//!     HttpServer::new(|| App::new().service(ws))
 //!     .bind("127.0.0.1:8080")?
 //!     .run()
 //!     .await
@@ -52,7 +56,6 @@
 #![forbid(unused_variables)]
 
 use core::cell::RefCell;
-use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use core::time::Duration;
@@ -66,16 +69,9 @@ pub use actix_http::ws::{
 };
 
 use actix_codec::{Decoder, Encoder};
-use actix_service::{
-    boxed::{BoxService, BoxServiceFactory},
-    Service, ServiceFactory,
-};
 use actix_web::{
-    dev::{
-        AppService, HttpResponseBuilder, HttpServiceFactory, Payload, ResourceDef, ServiceRequest,
-        ServiceResponse,
-    },
-    error::{Error, PayloadError},
+    dev::{HttpResponseBuilder, Payload},
+    error::Error,
     http::{header, Method, StatusCode},
     web,
     web::{Bytes, BytesMut},
@@ -83,48 +79,47 @@ use actix_web::{
 };
 use futures_channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use futures_util::{
-    future::{err, ok, Either, LocalBoxFuture, Ready},
+    future::{err, ok, Ready},
     stream::Stream,
-    FutureExt,
 };
-use pin_project::{pin_project, pinned_drop};
+use pin_project::pin_project;
 
-type HttpService = BoxService<ServiceRequest, ServiceResponse, Error>;
-type HttpNewService = BoxServiceFactory<(), ServiceRequest, ServiceResponse, Error, ()>;
-
-pub struct WebSockets {
-    codec: Codec,
+/// config for WebSockets.
+///
+/// # example:
+/// ```rust no_run
+/// use actix_web::{App, HttpServer};
+/// use actix_send_websocket::WsConfig;
+///
+/// #[actix_web::main]
+/// async fn main() -> std::io::Result<()> {
+///     HttpServer::new(||
+///         App::new().app_data(WsConfig::new().disable_heartbeat())
+///     )
+///     .bind("127.0.0.1:8080")?
+///     .run()
+///     .await
+/// }
+/// ```
+#[derive(Clone)]
+pub struct WsConfig {
+    codec: Option<Codec>,
     heartbeat: Option<Duration>,
     timeout: Duration,
-    path: String,
-    default: Rc<RefCell<Option<Rc<HttpNewService>>>>,
-    handler: WebSocketsHandler,
-    on_call: Option<WebSocketsOnCallHandler>,
-    on_stop: Option<WebSocketsOnStopHandler>,
 }
 
-impl WebSockets {
-    pub fn new(path: impl Into<String>) -> Self {
-        Self {
-            codec: Codec::new(),
-            heartbeat: Some(Duration::from_secs(5)),
-            timeout: Duration::from_secs(10),
-            path: path.into(),
-            default: Rc::new(RefCell::new(None)),
-            handler: WebSocketsHandler {
-                handler: Rc::new(|_, _| async { Ok(None) }),
-            },
-            on_call: None,
-            on_stop: None,
-        }
+impl WsConfig {
+    pub fn new() -> Self {
+        Self::default()
     }
 
+    /// Set WebSockets protocol codec.
     pub fn codec(mut self, codec: Codec) -> Self {
-        self.codec = codec;
+        self.codec = Some(codec);
         self
     }
 
-    /// Set the heartbeat interval.
+    /// Set the heartbeat check interval.
     pub fn heartbeat(mut self, dur: Duration) -> Self {
         self.heartbeat = Some(dur);
         self
@@ -142,112 +137,182 @@ impl WebSockets {
         self
     }
 
-    /// websocket handler.
-    pub fn to<F, R>(mut self, handler: F) -> Self
-    where
-        F: Fn(HttpRequest, Result<Message, ProtocolError>) -> R + 'static,
-        R: Future<Output = Result<Option<Vec<Message>>, Error>> + 'static,
-    {
-        self.handler = WebSocketsHandler {
-            handler: Rc::new(handler),
+    /// Extract WsConfig config from app data. Check both `T` and `Data<T>`, in that order, and fall
+    /// back to the default payload config.
+    fn from_req(req: &HttpRequest) -> &Self {
+        req.app_data::<Self>()
+            .or_else(|| req.app_data::<web::Data<Self>>().map(|d| d.as_ref()))
+            .unwrap_or_else(|| &DEFAULT_CONFIG)
+    }
+}
+
+// Allow shared refs to default.
+// ToDo: make Codec use const constructor.
+const DEFAULT_CONFIG: WsConfig = WsConfig {
+    codec: None,
+    heartbeat: Some(Duration::from_secs(5)),
+    timeout: Duration::from_secs(10),
+};
+
+impl Default for WsConfig {
+    fn default() -> Self {
+        DEFAULT_CONFIG.clone()
+    }
+}
+
+/// extractor type for websocket.
+pub struct WebSocketStream {
+    tx: UnboundedSender<Message>,
+    decode: DecodeStream,
+    response: HttpResponse,
+}
+
+impl WebSocketStream {
+    pub fn into_parts(self) -> (DecodeStream, HttpResponse, UnboundedSender<Message>) {
+        (self.decode, self.response, self.tx)
+    }
+}
+
+impl FromRequest for WebSocketStream {
+    type Error = Error;
+    type Future = Ready<Result<Self, Self::Error>>;
+    type Config = WsConfig;
+
+    fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
+        let mut res = match handshake(&req) {
+            Ok(res) => res,
+            Err(e) => return err(e.into()),
+        };
+        let cfg = Self::Config::from_req(req);
+        let stream = payload.take();
+
+        let (tx, rx) = futures_channel::mpsc::unbounded();
+
+        let manager = DecodeStreamManager::new(cfg.heartbeat, cfg.timeout, tx.clone()).start();
+        let codec = cfg.codec.unwrap_or_else(Codec::new);
+
+        let decode = DecodeStream {
+            manager,
+            stream,
+            codec,
+            buf: Default::default(),
         };
 
-        self
-    }
+        let encode = EncodeStream {
+            rx,
+            codec,
+            buf: Default::default(),
+        };
 
-    /// Handler function which would called before a service is called.
-    pub fn on_call<F, R>(mut self, on_call: F) -> Self
-    where
-        F: Fn(HttpRequest, UnboundedSender<Message>) -> R + 'static,
-        R: Future<Output = Result<(), Error>> + 'static,
-    {
-        self.on_call = Some(WebSocketsOnCallHandler {
-            handler: Rc::new(on_call),
-        });
-        self
-    }
+        let response = res.streaming(encode);
 
-    /// Handler function which would called when websocket connection is shutting down.
-    pub fn on_stop<F>(mut self, on_stop: F) -> Self
-    where
-        F: Fn(&HttpRequest) + 'static,
-    {
-        self.on_stop = Some(WebSocketsOnStopHandler {
-            handler: Rc::new(on_stop),
-        });
-        self
+        ok(WebSocketStream {
+            tx,
+            decode,
+            response,
+        })
     }
 }
 
-#[derive(Clone)]
-struct WebSocketsHandler {
-    handler: Rc<dyn WebSocketsHandlerTrait>,
+// decode incoming stream. eg: actix_web::web::Payload to a websocket Message.
+#[pin_project]
+pub struct DecodeStream {
+    manager: DecodeStreamManager,
+    #[pin]
+    stream: Payload,
+    codec: Codec,
+    buf: BytesMut,
 }
 
-trait WebSocketsHandlerTrait {
-    fn handle(
-        &self,
-        req: HttpRequest,
-        msg: Result<Message, ProtocolError>,
-    ) -> LocalBoxFuture<'static, Result<Option<Vec<Message>>, Error>>;
-}
+impl Stream for DecodeStream {
+    // Decode error is packed with websocket Message and return as a Result.
+    type Item = Result<Message, ProtocolError>;
 
-impl<F, R> WebSocketsHandlerTrait for F
-where
-    F: Fn(HttpRequest, Result<Message, ProtocolError>) -> R,
-    R: Future<Output = Result<Option<Vec<Message>>, Error>> + 'static,
-{
-    fn handle(
-        &self,
-        req: HttpRequest,
-        msg: Result<Message, ProtocolError>,
-    ) -> LocalBoxFuture<'static, Result<Option<Vec<Message>>, Error>> {
-        Box::pin(self(req, msg))
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let mut this = self.as_mut().project();
+
+        if !this.manager.is_closed() {
+            loop {
+                this = self.as_mut().project();
+                match Pin::new(&mut this.stream).poll_next(cx) {
+                    Poll::Ready(Some(Ok(chunk))) => {
+                        this.buf.extend_from_slice(&chunk[..]);
+                    }
+                    Poll::Ready(None) => {
+                        this.manager.set_close();
+                        break;
+                    }
+                    Poll::Pending => break,
+                    Poll::Ready(Some(Err(e))) => {
+                        return Poll::Ready(Some(Err(ProtocolError::Io(io::Error::new(
+                            io::ErrorKind::Other,
+                            format!("{}", e),
+                        )))));
+                    }
+                }
+            }
+        }
+
+        match this.codec.decode(this.buf)? {
+            None => {
+                if this.manager.is_closed() {
+                    Poll::Ready(None)
+                } else {
+                    Poll::Pending
+                }
+            }
+            Some(frm) => {
+                let msg = match frm {
+                    Frame::Text(data) => Message::Text(
+                        std::str::from_utf8(&data)
+                            .map_err(|e| {
+                                ProtocolError::Io(io::Error::new(
+                                    io::ErrorKind::Other,
+                                    format!("{}", e),
+                                ))
+                            })?
+                            .to_string(),
+                    ),
+                    Frame::Binary(data) => Message::Binary(data),
+                    Frame::Ping(s) => {
+                        // decode stream manager would handle ping message and close the connection
+                        // if client failed to maintain heartbeat.
+                        if this.manager.check_hb() {
+                            Message::Ping(s)
+                        } else {
+                            Message::Close(Some(CloseCode::Normal.into()))
+                        }
+                    }
+                    Frame::Pong(s) => Message::Pong(s),
+                    Frame::Close(reason) => Message::Close(reason),
+                    Frame::Continuation(item) => Message::Continuation(item),
+                };
+                Poll::Ready(Some(Ok(msg)))
+            }
+        }
     }
 }
 
-#[derive(Clone)]
-struct WebSocketsOnCallHandler {
-    handler: Rc<dyn WebSocketsOnCallHandlerTrait>,
+struct EncodeStream {
+    rx: UnboundedReceiver<Message>,
+    codec: Codec,
+    buf: BytesMut,
 }
 
-trait WebSocketsOnCallHandlerTrait {
-    fn handle(
-        &self,
-        req: HttpRequest,
-        sender: UnboundedSender<Message>,
-    ) -> Pin<Box<dyn Future<Output = Result<(), Error>>>>;
-}
+impl Stream for EncodeStream {
+    type Item = Result<Bytes, Error>;
 
-impl<F, R> WebSocketsOnCallHandlerTrait for F
-where
-    F: Fn(HttpRequest, UnboundedSender<Message>) -> R,
-    R: Future<Output = Result<(), Error>> + 'static,
-{
-    fn handle(
-        &self,
-        req: HttpRequest,
-        sender: UnboundedSender<Message>,
-    ) -> Pin<Box<dyn Future<Output = Result<(), Error>>>> {
-        Box::pin(self(req, sender))
-    }
-}
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
 
-#[derive(Clone)]
-struct WebSocketsOnStopHandler {
-    handler: Rc<dyn WebSocketsOnStopHandlerTrait>,
-}
-
-trait WebSocketsOnStopHandlerTrait {
-    fn handle(&self, req: &HttpRequest);
-}
-
-impl<F> WebSocketsOnStopHandlerTrait for F
-where
-    F: Fn(&HttpRequest),
-{
-    fn handle(&self, req: &HttpRequest) {
-        (self)(req);
+        match Pin::new(&mut this.rx).poll_next(cx) {
+            Poll::Ready(Some(msg)) => match this.codec.encode(msg, &mut this.buf) {
+                Ok(()) => Poll::Ready(Some(Ok(this.buf.split().freeze()))),
+                Err(e) => Poll::Ready(Some(Err(e.into()))),
+            },
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
 
@@ -258,16 +323,18 @@ struct DecodeStreamManager {
     interval: Option<Duration>,
     timeout: Duration,
     heartbeat: Rc<RefCell<Instant>>,
+    tx: UnboundedSender<Message>,
 }
 
 impl DecodeStreamManager {
-    fn new(interval: Option<Duration>, timeout: Duration) -> Self {
+    fn new(interval: Option<Duration>, timeout: Duration, tx: UnboundedSender<Message>) -> Self {
         Self {
             enable_heartbeat: interval.is_some(),
             close_flag: Rc::new(RefCell::new(false)),
             interval,
             timeout,
             heartbeat: Rc::new(RefCell::new(Instant::now())),
+            tx,
         }
     }
 
@@ -281,10 +348,8 @@ impl DecodeStreamManager {
                         break;
                     }
                     if !this.check_hb() {
-                        println!("breaking hb");
                         break;
                     }
-                    println!("running hb");
                 }
             });
         }
@@ -308,6 +373,7 @@ impl DecodeStreamManager {
         let heartbeat = self.heartbeat.borrow();
         if now.duration_since(*heartbeat) > self.timeout {
             self.set_close();
+            let _ = self.tx.unbounded_send(Message::Close(None));
             false
         } else {
             true
@@ -315,157 +381,23 @@ impl DecodeStreamManager {
     }
 }
 
-impl HttpServiceFactory for WebSockets {
-    fn register(self, config: &mut AppService) {
-        if self.default.borrow().is_none() {
-            *self.default.borrow_mut() = Some(config.default_service());
-        }
-        let rdef = if config.is_root() {
-            ResourceDef::root_prefix(&self.path)
-        } else {
-            ResourceDef::prefix(&self.path)
-        };
-        config.register_service(rdef, None, self, None)
-    }
-}
-
-impl ServiceFactory for WebSockets {
-    type Request = ServiceRequest;
-    type Response = ServiceResponse;
-    type Error = Error;
-    type Config = ();
-    type Service = WebSocketsService;
-    type InitError = ();
-    type Future = LocalBoxFuture<'static, Result<Self::Service, Self::InitError>>;
-
-    fn new_service(&self, _: ()) -> Self::Future {
-        let mut srv = WebSocketsService {
-            codec: self.codec,
-            heartbeat: self.heartbeat,
-            timeout: self.timeout,
-            default: None,
-            handler: self.handler.clone(),
-            on_call: self.on_call.clone(),
-            on_stop: self.on_stop.clone(),
-        };
-
-        if let Some(ref default) = *self.default.borrow() {
-            default
-                .new_service(())
-                .map(move |result| match result {
-                    Ok(default) => {
-                        srv.default = Some(default);
-                        Ok(srv)
-                    }
-                    Err(_) => Err(()),
-                })
-                .boxed_local()
-        } else {
-            ok(srv).boxed_local()
-        }
-    }
-}
-
-pub struct WebSocketsService {
-    codec: Codec,
-    heartbeat: Option<Duration>,
-    timeout: Duration,
-    default: Option<HttpService>,
-    handler: WebSocketsHandler,
-    on_call: Option<WebSocketsOnCallHandler>,
-    on_stop: Option<WebSocketsOnStopHandler>,
-}
-
-impl Service for WebSocketsService {
-    type Request = ServiceRequest;
-    type Response = ServiceResponse;
-    type Error = Error;
-    #[allow(clippy::type_complexity)]
-    type Future = Either<
-        Ready<Result<Self::Response, Self::Error>>,
-        LocalBoxFuture<'static, Result<Self::Response, Self::Error>>,
-    >;
-
-    fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, req: ServiceRequest) -> Self::Future {
-        let (req, payload) = req.into_parts();
-
-        // do handshake first.
-        let mut res = match handshake(&req) {
-            Ok(res) => res,
-            Err(e) => return Either::Left(err(e.into())),
-        };
-
-        // construct a channel if we have a on_call function. the channel is used to push message directly
-        // to response(EncodeStream) stream.
-        let mut on_call = None;
-        let rx = match self.on_call.as_ref() {
-            Some(call) => {
-                let (tx, rx) = futures_channel::mpsc::unbounded();
-                on_call = Some(call.handler.handle(req.clone(), tx));
-                Some(rx)
-            }
-            None => None,
-        };
-
-        let manager = DecodeStreamManager::new(self.heartbeat, self.timeout).start();
-
-        let decode_stream = DecodeStream {
-            manager,
-            stream: payload,
-            codec: self.codec,
-            buf: BytesMut::new(),
-        };
-
-        // handler stream would take the on_stop function and call it when it's dropping.
-        let handler_stream = HandlerStream {
-            on_stop: self.on_stop.clone(),
-            stream: decode_stream,
-            request: req.clone(),
-            handler: self.handler.clone(),
-            fut: None,
-        };
-
-        let encode_stream = EncodeStream {
-            rx,
-            stream: handler_stream,
-            buf: BytesMut::new(),
-            codec: self.codec,
-            queue: Vec::new(),
-        };
-
-        let res = res.streaming(encode_stream);
-
-        match on_call {
-            Some(on_call) => Either::Right(Box::pin(async move {
-                on_call.await?;
-                Ok(ServiceResponse::new(req, res))
-            })),
-            None => Either::Left(ok(ServiceResponse::new(req, res))),
-        }
-    }
-}
-
-/// Prepare `WebSocket` handshake response.
-///
-/// This function returns handshake `HttpResponse`, ready to send to peer.
-/// It does not perform any IO.
-pub fn handshake(req: &HttpRequest) -> Result<HttpResponseBuilder, HandshakeError> {
+// Prepare `WebSocket` handshake response.
+//
+// This function returns handshake `HttpResponse`, ready to send to peer.
+// It does not perform any IO.
+fn handshake(req: &HttpRequest) -> Result<HttpResponseBuilder, HandshakeError> {
     handshake_with_protocols(req, &[])
 }
 
-/// Prepare `WebSocket` handshake response.
-///
-/// This function returns handshake `HttpResponse`, ready to send to peer.
-/// It does not perform any IO.
-///
-/// `protocols` is a sequence of known protocols. On successful handshake,
-/// the returned response headers contain the first protocol in this list
-/// which the server also knows.
-pub fn handshake_with_protocols(
+// Prepare `WebSocket` handshake response.
+//
+// This function returns handshake `HttpResponse`, ready to send to peer.
+// It does not perform any IO.
+//
+// `protocols` is a sequence of known protocols. On successful handshake,
+// the returned response headers contain the first protocol in this list
+// which the server also knows.
+fn handshake_with_protocols(
     req: &HttpRequest,
     protocols: &[&str],
 ) -> Result<HttpResponseBuilder, HandshakeError> {
@@ -540,508 +472,4 @@ pub fn handshake_with_protocols(
     }
 
     Ok(response)
-}
-
-// decode incoming stream. eg: actix_web::web::Payload to a websocket Message.
-#[pin_project]
-struct DecodeStream<S>
-where
-    S: Stream<Item = Result<Bytes, PayloadError>>,
-{
-    manager: DecodeStreamManager,
-    #[pin]
-    stream: S,
-    codec: Codec,
-    buf: BytesMut,
-}
-
-impl<S> Stream for DecodeStream<S>
-where
-    S: Stream<Item = Result<Bytes, PayloadError>>,
-{
-    // Decode error is packed with websocket Message and return as a Result.
-    type Item = Result<Message, ProtocolError>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut this = self.as_mut().project();
-
-        if !this.manager.is_closed() {
-            loop {
-                this = self.as_mut().project();
-                match Pin::new(&mut this.stream).poll_next(cx) {
-                    Poll::Ready(Some(Ok(chunk))) => {
-                        this.buf.extend_from_slice(&chunk[..]);
-                    }
-                    Poll::Ready(None) => {
-                        this.manager.set_close();
-                        break;
-                    }
-                    Poll::Pending => break,
-                    Poll::Ready(Some(Err(e))) => {
-                        return Poll::Ready(Some(Err(ProtocolError::Io(io::Error::new(
-                            io::ErrorKind::Other,
-                            format!("{}", e),
-                        )))));
-                    }
-                }
-            }
-        }
-
-        match this.codec.decode(this.buf)? {
-            None => {
-                if this.manager.is_closed() {
-                    Poll::Ready(None)
-                } else {
-                    Poll::Pending
-                }
-            }
-            Some(frm) => {
-                let msg = match frm {
-                    Frame::Text(data) => Message::Text(
-                        std::str::from_utf8(&data)
-                            .map_err(|e| {
-                                ProtocolError::Io(io::Error::new(
-                                    io::ErrorKind::Other,
-                                    format!("{}", e),
-                                ))
-                            })?
-                            .to_string(),
-                    ),
-                    Frame::Binary(data) => Message::Binary(data),
-                    Frame::Ping(s) => {
-                        // decode stream manager would handle ping message and close the connection
-                        // if client failed to maintain heartbeat.
-                        if this.manager.check_hb() {
-                            Message::Ping(s)
-                        } else {
-                            Message::Close(None)
-                        }
-                    }
-                    Frame::Pong(s) => Message::Pong(s),
-                    Frame::Close(reason) => Message::Close(reason),
-                    Frame::Continuation(item) => Message::Continuation(item),
-                };
-                Poll::Ready(Some(Ok(msg)))
-            }
-        }
-    }
-}
-
-#[pin_project(PinnedDrop)]
-struct HandlerStream<S>
-where
-    // messages come as an option.
-    S: Stream<Item = Result<Message, ProtocolError>>,
-{
-    handler: WebSocketsHandler,
-    on_stop: Option<WebSocketsOnStopHandler>,
-    #[pin]
-    stream: S,
-    request: HttpRequest,
-    fut: Option<LocalBoxFuture<'static, Result<Option<Vec<Message>>, Error>>>,
-}
-
-#[pinned_drop]
-impl<S> PinnedDrop for HandlerStream<S>
-where
-    S: Stream<Item = Result<Message, ProtocolError>>,
-{
-    fn drop(self: Pin<&mut Self>) {
-        let this = self.project();
-        if let Some(on_stop) = this.on_stop.as_mut() {
-            on_stop.handler.handle(&this.request);
-        }
-    }
-}
-
-impl<S> Stream for HandlerStream<S>
-where
-    S: Stream<Item = Result<Message, ProtocolError>>,
-{
-    // Decode error is packed with websocket Message and return as a Result.
-    type Item = Result<Option<Vec<Message>>, Error>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut this = self.as_mut().project();
-
-        if let Some(fut) = this.fut.as_mut() {
-            return match fut.as_mut().poll(cx) {
-                Poll::Ready(res) => {
-                    *this.fut = None;
-                    Poll::Ready(Some(res))
-                }
-                Poll::Pending => return Poll::Pending,
-            };
-        }
-
-        match Pin::new(&mut this.stream).poll_next(cx) {
-            Poll::Ready(Some(msg)) => {
-                let mut fut = this.handler.handler.handle(this.request.clone(), msg);
-                match fut.as_mut().poll(cx) {
-                    Poll::Ready(res) => Poll::Ready(Some(res)),
-                    Poll::Pending => {
-                        *this.fut = Some(fut);
-                        Poll::Pending
-                    }
-                }
-            }
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
-        }
-    }
-}
-
-#[pin_project]
-struct EncodeStream<S>
-where
-    // messages come as an option.
-    S: Stream<Item = Result<Option<Vec<Message>>, Error>>,
-{
-    rx: Option<UnboundedReceiver<Message>>,
-    #[pin]
-    stream: S,
-    codec: Codec,
-    buf: BytesMut,
-    queue: Vec<Message>,
-}
-
-impl<S> EncodeStream<S>
-where
-    S: Stream<Item = Result<Option<Vec<Message>>, Error>>,
-{
-    fn poll_encode(self: Pin<&mut Self>, msg: Message) -> Poll<Option<Result<Bytes, Error>>> {
-        let mut this = self.project();
-        match this.codec.encode(msg, &mut this.buf) {
-            Ok(()) => Poll::Ready(Some(Ok(this.buf.split().freeze()))),
-            Err(e) => Poll::Ready(Some(Err(e.into()))),
-        }
-    }
-}
-
-impl<S> Stream for EncodeStream<S>
-where
-    S: Stream<Item = Result<Option<Vec<Message>>, Error>>,
-{
-    type Item = Result<Bytes, Error>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut this = self.as_mut().project();
-
-        if this.rx.is_some() {
-            match Pin::new(&mut this.rx.as_mut().unwrap()).poll_next(cx) {
-                Poll::Ready(Some(msg)) => return self.poll_encode(msg),
-                Poll::Ready(None) => *this.rx = None,
-                Poll::Pending => (),
-            }
-        }
-
-        if let Some(msg) = this.queue.pop() {
-            let poll = self.poll_encode(msg);
-            cx.waker().wake_by_ref();
-            return poll;
-        }
-
-        loop {
-            match Pin::new(&mut this.stream).poll_next(cx) {
-                Poll::Ready(Some(Ok(Some(ref mut msgs)))) => {
-                    std::mem::swap(msgs, &mut this.queue);
-                    return match this.queue.pop() {
-                        Some(msg) => {
-                            let poll = self.poll_encode(msg);
-                            cx.waker().wake_by_ref();
-                            poll
-                        }
-                        None => Poll::Pending,
-                    };
-                }
-                Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(None) => return Poll::Ready(None),
-                Poll::Ready(Some(Ok(None))) => continue,
-            }
-        }
-    }
-}
-
-impl FromRequest for WebSocketStream {
-    type Error = Error;
-    type Future = Ready<Result<Self, Self::Error>>;
-    type Config = WsConfig;
-
-    fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
-        let mut res = match handshake(&req) {
-            Ok(res) => res,
-            Err(e) => return err(e.into()),
-        };
-        let cfg = Self::Config::from_req(req);
-        let stream = payload.take();
-
-        let (tx, rx) = futures_channel::mpsc::unbounded();
-
-        let manager = DecodeStreamManager2::new(cfg.heartbeat, cfg.timeout, tx.clone()).start();
-        let codec = cfg.codec.unwrap_or_else(Codec::new);
-
-        let decode = DecodeStream2 {
-            manager,
-            stream,
-            codec,
-            buf: Default::default(),
-        };
-
-        let encode = EncodeStream2 {
-            rx,
-            codec,
-            buf: Default::default(),
-        };
-
-        let response = res.streaming(encode);
-
-        ok(WebSocketStream {
-            tx,
-            decode,
-            response,
-        })
-    }
-}
-
-pub struct WebSocketStream {
-    tx: UnboundedSender<Message>,
-    decode: DecodeStream2,
-    response: HttpResponse,
-}
-
-impl WebSocketStream {
-    pub fn into_parts(self) -> (DecodeStream2, HttpResponse, UnboundedSender<Message>) {
-        (self.decode, self.response, self.tx)
-    }
-}
-
-// decode incoming stream. eg: actix_web::web::Payload to a websocket Message.
-#[pin_project]
-pub struct DecodeStream2 {
-    manager: DecodeStreamManager2,
-    #[pin]
-    stream: Payload,
-    codec: Codec,
-    buf: BytesMut,
-}
-
-impl Stream for DecodeStream2 {
-    // Decode error is packed with websocket Message and return as a Result.
-    type Item = Result<Message, ProtocolError>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut this = self.as_mut().project();
-
-        if !this.manager.is_closed() {
-            loop {
-                this = self.as_mut().project();
-                match Pin::new(&mut this.stream).poll_next(cx) {
-                    Poll::Ready(Some(Ok(chunk))) => {
-                        this.buf.extend_from_slice(&chunk[..]);
-                    }
-                    Poll::Ready(None) => {
-                        this.manager.set_close();
-                        break;
-                    }
-                    Poll::Pending => break,
-                    Poll::Ready(Some(Err(e))) => {
-                        return Poll::Ready(Some(Err(ProtocolError::Io(io::Error::new(
-                            io::ErrorKind::Other,
-                            format!("{}", e),
-                        )))));
-                    }
-                }
-            }
-        }
-
-        match this.codec.decode(this.buf)? {
-            None => {
-                if this.manager.is_closed() {
-                    Poll::Ready(None)
-                } else {
-                    Poll::Pending
-                }
-            }
-            Some(frm) => {
-                let msg = match frm {
-                    Frame::Text(data) => Message::Text(
-                        std::str::from_utf8(&data)
-                            .map_err(|e| {
-                                ProtocolError::Io(io::Error::new(
-                                    io::ErrorKind::Other,
-                                    format!("{}", e),
-                                ))
-                            })?
-                            .to_string(),
-                    ),
-                    Frame::Binary(data) => Message::Binary(data),
-                    Frame::Ping(s) => {
-                        // decode stream manager would handle ping message and close the connection
-                        // if client failed to maintain heartbeat.
-                        if this.manager.check_hb() {
-                            Message::Ping(s)
-                        } else {
-                            Message::Close(Some(CloseCode::Normal.into()))
-                        }
-                    }
-                    Frame::Pong(s) => Message::Pong(s),
-                    Frame::Close(reason) => Message::Close(reason),
-                    Frame::Continuation(item) => Message::Continuation(item),
-                };
-                Poll::Ready(Some(Ok(msg)))
-            }
-        }
-    }
-}
-
-struct EncodeStream2 {
-    rx: UnboundedReceiver<Message>,
-    codec: Codec,
-    buf: BytesMut,
-}
-
-impl Stream for EncodeStream2 {
-    type Item = Result<Bytes, Error>;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.get_mut();
-
-        match Pin::new(&mut this.rx).poll_next(cx) {
-            Poll::Ready(Some(msg)) => match this.codec.encode(msg, &mut this.buf) {
-                Ok(()) => Poll::Ready(Some(Ok(this.buf.split().freeze()))),
-                Err(e) => Poll::Ready(Some(Err(e.into()))),
-            },
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct WsConfig {
-    codec: Option<Codec>,
-    heartbeat: Option<Duration>,
-    timeout: Duration,
-}
-
-impl WsConfig {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn codec(mut self, codec: Codec) -> Self {
-        self.codec = Some(codec);
-        self
-    }
-
-    /// Set the heartbeat interval.
-    pub fn heartbeat(mut self, dur: Duration) -> Self {
-        self.heartbeat = Some(dur);
-        self
-    }
-
-    /// Set the timeout duration for client does not send Ping for too long.
-    pub fn timeout(mut self, dur: Duration) -> Self {
-        self.timeout = dur;
-        self
-    }
-
-    /// Disable heartbeat check.
-    pub fn disable_heartbeat(mut self) -> Self {
-        self.heartbeat = None;
-        self
-    }
-
-    /// Extract WsConfig config from app data. Check both `T` and `Data<T>`, in that order, and fall
-    /// back to the default payload config.
-    fn from_req(req: &HttpRequest) -> &Self {
-        req.app_data::<Self>()
-            .or_else(|| req.app_data::<web::Data<Self>>().map(|d| d.as_ref()))
-            .unwrap_or_else(|| &DEFAULT_CONFIG)
-    }
-}
-
-// Allow shared refs to default.
-const DEFAULT_CONFIG: WsConfig = WsConfig {
-    codec: None,
-    heartbeat: Some(Duration::from_secs(5)),
-    timeout: Duration::from_secs(10),
-};
-
-impl Default for WsConfig {
-    fn default() -> Self {
-        Self {
-            codec: None,
-            heartbeat: Some(Duration::from_secs(5)),
-            timeout: Duration::from_secs(10),
-        }
-    }
-}
-
-#[derive(Clone)]
-struct DecodeStreamManager2 {
-    enable_heartbeat: bool,
-    close_flag: Rc<RefCell<bool>>,
-    interval: Option<Duration>,
-    timeout: Duration,
-    heartbeat: Rc<RefCell<Instant>>,
-    tx: UnboundedSender<Message>,
-}
-
-impl DecodeStreamManager2 {
-    fn new(interval: Option<Duration>, timeout: Duration, tx: UnboundedSender<Message>) -> Self {
-        Self {
-            enable_heartbeat: interval.is_some(),
-            close_flag: Rc::new(RefCell::new(false)),
-            interval,
-            timeout,
-            heartbeat: Rc::new(RefCell::new(Instant::now())),
-            tx,
-        }
-    }
-
-    fn start(self) -> Self {
-        if let Some(interval) = self.interval {
-            let this = self.clone();
-            actix_web::rt::spawn(async move {
-                loop {
-                    actix_web::rt::time::delay_for(interval).await;
-                    if Rc::strong_count(&this.close_flag) == 1 {
-                        break;
-                    }
-                    if !this.check_hb() {
-                        println!("breaking hb");
-                        break;
-                    }
-                    println!("running hb");
-                }
-            });
-        }
-
-        self
-    }
-
-    fn set_close(&self) {
-        *self.close_flag.borrow_mut() = true;
-    }
-
-    fn is_closed(&self) -> bool {
-        *self.close_flag.borrow()
-    }
-
-    fn check_hb(&self) -> bool {
-        if !self.enable_heartbeat {
-            return true;
-        }
-        let now = Instant::now();
-        let heartbeat = self.heartbeat.borrow();
-        if now.duration_since(*heartbeat) > self.timeout {
-            self.set_close();
-            let _ = self.tx.unbounded_send(Message::Close(None));
-            false
-        } else {
-            true
-        }
-    }
 }

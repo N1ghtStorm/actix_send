@@ -30,7 +30,7 @@ pub struct WsChatSession {
 
 /// Entry point for our route
 #[get("/ws/")]
-async fn chat_route(req: HttpRequest, websocket: WebSocketStream) -> impl Responder {
+async fn chat_route(server: Data<SharedChatServer>, websocket: WebSocketStream) -> impl Responder {
     // stream is the async iterator for incoming websocket messages.
     // res is the response to client.
     // tx is the sender to add message to response.
@@ -42,8 +42,6 @@ async fn chat_route(req: HttpRequest, websocket: WebSocketStream) -> impl Respon
         room: "Main".to_string(),
         name: None,
     };
-
-    let server = req.app_data::<Data<SharedChatServer>>().unwrap().clone();
 
     // insert id and sender to chat server. It can be used to send message directly to client from
     // other threads and/or websocket connections.
