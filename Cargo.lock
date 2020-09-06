@@ -376,7 +376,7 @@ dependencies = [
 [[package]]
 name = "actix_send_macros"
 version = "0.1.0"
-source = "git+https://github.com/fakeshadow/actix_send.git#d1f88e35b67d84ae3a9c63085bf20a5a038fb19c"
+source = "git+https://github.com/fakeshadow/actix_send.git#eaa4749a78e928ac37aa2e318e0ba24fd29200fa"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -395,11 +395,25 @@ dependencies = [
 [[package]]
 name = "actix_send_websocket"
 version = "0.1.0"
+source = "git+https://github.com/fakeshadow/actix_send.git#eaa4749a78e928ac37aa2e318e0ba24fd29200fa"
+dependencies = [
+ "actix-codec 0.2.0",
+ "actix-http",
+ "actix-web",
+ "futures-channel",
+ "futures-util",
+ "pin-project",
+]
+
+[[package]]
+name = "actix_send_websocket"
+version = "0.1.0"
 dependencies = [
  "actix",
  "actix-codec 0.2.0",
  "actix-http",
  "actix-rt",
+ "actix-utils 2.0.0",
  "actix-web",
  "futures-channel",
  "futures-util",
@@ -775,12 +789,12 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-channel"
-version = "0.4.3"
+version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09ee0cc8804d5393478d743b035099520087a5186f3b93fa58cec08fa62407b6"
+checksum = "b153fe7cbef478c567df0f972e02e6d736db11affe43dfc9c56a9374d1adfb87"
 dependencies = [
- "cfg-if",
  "crossbeam-utils",
+ "maybe-uninit",
 ]
 
 [[package]]
@@ -1095,12 +1109,9 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
-version = "0.8.2"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e91b62f79061a0bc2e046024cb7ba44b08419ed238ecbd9adbd787434b9e8c25"
-dependencies = [
- "autocfg",
-]
+checksum = "00d63df3d41950fb462ed38308eea019113ad1508da725bbedcd0fa5a85ef5f7"
 
 [[package]]
 name = "heck"
@@ -1161,9 +1172,9 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "1.5.2"
+version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e47a3566dd4fd4eec714ae6ceabdee0caec795be835c223d92c2d40f1e8cf1c"
+checksum = "55e2e4c765aa53a0424761bf9f41aa7a6ac1efa87238f59560640e27fca028f2"
 dependencies = [
  "autocfg",
  "hashbrown",
@@ -1301,6 +1312,12 @@ name = "matches"
 version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ffc5c5338469d4d3ea17d269fa8ea3512ad247247c30bd2df69e68309ed0a08"
+
+[[package]]
+name = "maybe-uninit"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60302e4db3a61da70c0cb7991976248362f30319e88850c487b9b95bbf059e00"
 
 [[package]]
 name = "memchr"
@@ -1559,9 +1576,9 @@ checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 
 [[package]]
 name = "polling"
-version = "0.1.8"
+version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1e9fa0ab21ed700cf0c4ebec57ae5496bec942a0aef9545562979a9f75b97aa"
+checksum = "8fffa183f6bd5f1a8a3e1f60ce2f8d5621e350eed84a62d6daaa5b9d1aaf6fbd"
 dependencies = [
  "cfg-if",
  "libc",
@@ -1913,9 +1930,9 @@ checksum = "213701ba3370744dcd1a12960caa4843b3d68b4d1c0a5d575e0d65b2ee9d16c0"
 
 [[package]]
 name = "syn"
-version = "1.0.39"
+version = "1.0.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891d8d6567fe7c7f8835a3a98af4208f3846fba258c1bc3c31d6e506239f11f9"
+checksum = "963f7d3cc59b59b9325165add223142bbf1df27655d07789f109896d353d8350"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2328,7 +2345,7 @@ version = "0.1.0"
 dependencies = [
  "actix-files",
  "actix-web",
- "actix_send_websocket",
+ "actix_send_websocket 0.1.0 (git+https://github.com/fakeshadow/actix_send.git)",
  "futures-channel",
  "futures-util",
  "rand",

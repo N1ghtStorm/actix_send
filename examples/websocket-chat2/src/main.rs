@@ -62,8 +62,6 @@ async fn chat_route(server: Data<SharedChatServer>, websocket: WebSocket) -> imp
                         let v: Vec<&str> = m.splitn(2, ' ').collect();
                         match v[0] {
                             "/list" => {
-                                // Send ListRooms message to chat server and wait for
-                                // response
                                 println!("List rooms");
                                 let rooms = server
                                     .get()
@@ -109,7 +107,7 @@ async fn chat_route(server: Data<SharedChatServer>, websocket: WebSocket) -> imp
                         } else {
                             m.to_owned()
                         };
-                        // send message to chat server
+                        // send message with chat server
                         server
                             .get()
                             .send_message(&session.room, msg.as_str(), session.id);
@@ -134,6 +132,7 @@ async fn chat_route(server: Data<SharedChatServer>, websocket: WebSocket) -> imp
                 Message::Nop => Ok(()),
             };
 
+            // send is failed because response is gone so we should end the stream.
             if res.is_err() {
                 break;
             }

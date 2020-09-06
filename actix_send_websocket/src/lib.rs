@@ -23,7 +23,6 @@
 //!                 Message::Close(reason) => {
 //!                     let _ = tx.close(reason).await;
 //!                     // force end the stream when we have a close message.
-//!                     // this message can either from the client or background heartbeat manager.
 //!                     break;
 //!                 }
 //!                 // other types of message would be ignored
@@ -65,6 +64,7 @@ pub use actix_http::ws::{
 };
 
 use actix_codec::{Decoder, Encoder};
+use actix_utils::task::LocalWaker;
 use actix_web::{
     dev::{HttpResponseBuilder, Payload},
     error::Error,
@@ -186,6 +186,7 @@ impl FromRequest for WebSocket {
         let codec = cfg.codec.unwrap_or_else(Codec::new);
 
         let decode = DecodeStream {
+            closed: false,
             manager,
             stream,
             codec,
@@ -207,6 +208,7 @@ impl FromRequest for WebSocket {
 // decode incoming stream. eg: actix_web::web::Payload to a websocket Message.
 #[pin_project]
 pub struct DecodeStream {
+    closed: bool,
     manager: DecodeStreamManager,
     #[pin]
     stream: Payload,
@@ -221,7 +223,21 @@ impl Stream for DecodeStream {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.as_mut().project();
 
-        if !this.manager.is_closed() {
+        // if heartbeat is disabled then there is no need to check the waker.
+        if this.manager.enable_heartbeat {
+            if Rc::strong_count(&this.manager.decode_stream_waker) == 1 {
+                // waked up when heartbeat interval quited so resolve the stream.
+                return Poll::Ready(None);
+            }
+
+            // otherwise update the waker.
+            this.manager
+                .decode_stream_waker
+                .borrow_mut()
+                .register(cx.waker());
+        }
+
+        if !*this.closed {
             loop {
                 this = self.as_mut().project();
                 match Pin::new(&mut this.stream).poll_next(cx) {
@@ -229,7 +245,7 @@ impl Stream for DecodeStream {
                         this.buf.extend_from_slice(&chunk[..]);
                     }
                     Poll::Ready(None) => {
-                        this.manager.set_close();
+                        *this.closed = true;
                         break;
                     }
                     Poll::Pending => break,
@@ -245,7 +261,7 @@ impl Stream for DecodeStream {
 
         match this.codec.decode(this.buf)? {
             None => {
-                if this.manager.is_closed() {
+                if *this.closed {
                     Poll::Ready(None)
                 } else {
                     Poll::Pending
@@ -265,12 +281,12 @@ impl Stream for DecodeStream {
                     ),
                     Frame::Binary(data) => Message::Binary(data),
                     Frame::Ping(s) => {
-                        // decode stream manager would handle ping message and close the connection
-                        // if client failed to maintain heartbeat.
-                        if this.manager.check_hb() {
-                            Message::Ping(s)
+                        // resolve the stream if heartbeat check failed
+                        if this.manager.enable_heartbeat && this.manager.is_timeout() {
+                            return Poll::Ready(None);
                         } else {
-                            Message::Close(Some(CloseCode::Normal.into()))
+                            // either no heartbeat or check success so give a pass.
+                            Message::Ping(s)
                         }
                     }
                     Frame::Pong(s) => Message::Pong(s),
@@ -308,19 +324,26 @@ impl Stream for EncodeStream {
 
 #[derive(Clone)]
 struct DecodeStreamManager {
+    decode_stream_waker: Rc<RefCell<LocalWaker>>,
     enable_heartbeat: bool,
-    close_flag: Rc<RefCell<bool>>,
     interval: Option<Duration>,
     timeout: Duration,
     heartbeat: Rc<RefCell<Instant>>,
     tx: WebSocketSender,
 }
 
+// try wake up decode stream when dropping manager.
+impl Drop for DecodeStreamManager {
+    fn drop(&mut self) {
+        self.decode_stream_waker.borrow().wake();
+    }
+}
+
 impl DecodeStreamManager {
     fn new(interval: Option<Duration>, timeout: Duration, tx: WebSocketSender) -> Self {
         Self {
+            decode_stream_waker: Rc::new(RefCell::new(Default::default())),
             enable_heartbeat: interval.is_some(),
-            close_flag: Rc::new(RefCell::new(false)),
             interval,
             timeout,
             heartbeat: Rc::new(RefCell::new(Instant::now())),
@@ -334,10 +357,16 @@ impl DecodeStreamManager {
             actix_web::rt::spawn(async move {
                 loop {
                     actix_web::rt::time::delay_for(interval).await;
-                    if Rc::strong_count(&this.close_flag) == 1 {
+                    // quit when timed out.
+                    if this.is_timeout() {
                         break;
                     }
-                    if !this.check_hb() {
+                    // quit when decode stream is gone.
+                    if Rc::strong_count(&this.decode_stream_waker) == 1 {
+                        break;
+                    }
+                    // quit when encode stream is gone
+                    if this.tx.0.is_closed() {
                         break;
                     }
                 }
@@ -347,28 +376,17 @@ impl DecodeStreamManager {
         self
     }
 
-    fn set_close(&self) {
-        *self.close_flag.borrow_mut() = true;
-    }
-
-    fn is_closed(&self) -> bool {
-        *self.close_flag.borrow()
-    }
-
-    fn check_hb(&self) -> bool {
-        if !self.enable_heartbeat {
-            return true;
-        }
+    fn is_timeout(&self) -> bool {
         let now = Instant::now();
         let heartbeat = self.heartbeat.borrow();
         if now.duration_since(*heartbeat) > self.timeout {
-            self.set_close();
+            // send close message to client when hb check is failed.
             let _ = self
                 .tx
                 .try_send(Message::Close(Some(CloseCode::Normal.into())));
-            false
-        } else {
             true
+        } else {
+            false
         }
     }
 }
