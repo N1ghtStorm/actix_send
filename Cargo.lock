@@ -2346,7 +2346,6 @@ dependencies = [
  "actix-files",
  "actix-web",
  "actix_send_websocket 0.1.0 (git+https://github.com/fakeshadow/actix_send.git)",
- "futures-channel",
  "futures-util",
  "rand",
 ]

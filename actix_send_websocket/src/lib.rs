@@ -51,6 +51,7 @@
 #![forbid(unused_variables)]
 
 use core::cell::RefCell;
+use core::fmt::{Debug, Display};
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use core::time::Duration;
@@ -69,8 +70,8 @@ use actix_web::{
     dev::{HttpResponseBuilder, Payload},
     error::Error,
     http::{header, Method, StatusCode},
-    web,
-    web::{Bytes, BytesMut},
+    rt,
+    web::{Bytes, BytesMut, Data},
     FromRequest, HttpRequest, HttpResponse,
 };
 use futures_channel::mpsc::{TrySendError, UnboundedReceiver, UnboundedSender};
@@ -84,7 +85,7 @@ use pin_project::pin_project;
 /// config for WebSockets.
 ///
 /// # example:
-/// ```rust no_run
+/// ```rust,no_run
 /// use actix_web::{App, HttpServer};
 /// use actix_send_websocket::WsConfig;
 ///
@@ -138,7 +139,7 @@ impl WsConfig {
     /// back to the default payload config.
     fn from_req(req: &HttpRequest) -> &Self {
         req.app_data::<Self>()
-            .or_else(|| req.app_data::<web::Data<Self>>().map(|d| d.as_ref()))
+            .or_else(|| req.app_data::<Data<Self>>().map(|d| d.as_ref()))
             .unwrap_or_else(|| &DEFAULT_CONFIG)
     }
 }
@@ -158,10 +159,14 @@ impl Default for WsConfig {
 }
 
 /// extractor type for websocket.
-pub struct WebSocket(pub DecodeStream, pub HttpResponse, pub WebSocketSender);
+pub struct WebSocket(
+    pub DecodeStream<Payload>,
+    pub HttpResponse,
+    pub WebSocketSender,
+);
 
 impl WebSocket {
-    pub fn into_parts(self) -> (DecodeStream, HttpResponse, WebSocketSender) {
+    pub fn into_parts(self) -> (DecodeStream<Payload>, HttpResponse, WebSocketSender) {
         (self.0, self.1, self.2)
     }
 }
@@ -179,25 +184,7 @@ impl FromRequest for WebSocket {
         let cfg = Self::Config::from_req(req);
         let stream = payload.take();
 
-        let (tx, rx) = futures_channel::mpsc::unbounded();
-        let tx = WebSocketSender(tx);
-
-        let manager = DecodeStreamManager::new(cfg.heartbeat, cfg.timeout, tx.clone()).start();
-        let codec = cfg.codec.unwrap_or_else(Codec::new);
-
-        let decode = DecodeStream {
-            closed: false,
-            manager,
-            stream,
-            codec,
-            buf: Default::default(),
-        };
-
-        let encode = EncodeStream {
-            rx,
-            codec,
-            buf: Default::default(),
-        };
+        let (decode, encode, tx) = split_stream(cfg, stream);
 
         let response = res.streaming(encode);
 
@@ -205,18 +192,50 @@ impl FromRequest for WebSocket {
     }
 }
 
-// decode incoming stream. eg: actix_web::web::Payload to a websocket Message.
+/// split stream into decode/encode streams and a sender that can send item to encode stream.
+pub fn split_stream<S>(
+    cfg: &WsConfig,
+    stream: S,
+) -> (DecodeStream<S>, EncodeStream, WebSocketSender) {
+    let (tx, rx) = futures_channel::mpsc::unbounded();
+    let tx = WebSocketSender(tx);
+
+    let manager = DecodeStreamManager::new(cfg.heartbeat, cfg.timeout, tx.clone()).start();
+    let codec = cfg.codec.unwrap_or_else(Codec::new);
+
+    let decode = DecodeStream {
+        closed: false,
+        manager,
+        stream,
+        codec,
+        buf: Default::default(),
+    };
+
+    let encode = EncodeStream {
+        rx,
+        codec,
+        buf: Default::default(),
+    };
+
+    (decode, encode, tx)
+}
+
+// decode incoming stream.
 #[pin_project]
-pub struct DecodeStream {
+pub struct DecodeStream<S> {
     closed: bool,
     manager: DecodeStreamManager,
     #[pin]
-    stream: Payload,
+    stream: S,
     codec: Codec,
     buf: BytesMut,
 }
 
-impl Stream for DecodeStream {
+impl<E, S> Stream for DecodeStream<S>
+where
+    S: Stream<Item = Result<Bytes, E>>,
+    E: Debug + Display,
+{
     // Decode error is packed with websocket Message and return as a Result.
     type Item = Result<Message, ProtocolError>;
 
@@ -281,13 +300,8 @@ impl Stream for DecodeStream {
                     ),
                     Frame::Binary(data) => Message::Binary(data),
                     Frame::Ping(s) => {
-                        // resolve the stream if heartbeat check failed
-                        if this.manager.enable_heartbeat && this.manager.is_timeout() {
-                            return Poll::Ready(None);
-                        } else {
-                            // either no heartbeat or check success so give a pass.
-                            Message::Ping(s)
-                        }
+                        this.manager.update_heartbeat();
+                        Message::Ping(s)
                     }
                     Frame::Pong(s) => Message::Pong(s),
                     Frame::Close(reason) => Message::Close(reason),
@@ -299,7 +313,7 @@ impl Stream for DecodeStream {
     }
 }
 
-struct EncodeStream {
+pub struct EncodeStream {
     rx: UnboundedReceiver<Message>,
     codec: Codec,
     buf: BytesMut,
@@ -354,9 +368,9 @@ impl DecodeStreamManager {
     fn start(self) -> Self {
         if let Some(interval) = self.interval {
             let this = self.clone();
-            actix_web::rt::spawn(async move {
+            rt::spawn(async move {
                 loop {
-                    actix_web::rt::time::delay_for(interval).await;
+                    rt::time::delay_for(interval).await;
                     // quit when timed out.
                     if this.is_timeout() {
                         break;
@@ -377,9 +391,8 @@ impl DecodeStreamManager {
     }
 
     fn is_timeout(&self) -> bool {
-        let now = Instant::now();
         let heartbeat = self.heartbeat.borrow();
-        if now.duration_since(*heartbeat) > self.timeout {
+        if Instant::now().duration_since(*heartbeat) > self.timeout {
             // send close message to client when hb check is failed.
             let _ = self
                 .tx
@@ -387,6 +400,12 @@ impl DecodeStreamManager {
             true
         } else {
             false
+        }
+    }
+
+    fn update_heartbeat(&self) {
+        if self.enable_heartbeat {
+            *self.heartbeat.borrow_mut() = Instant::now();
         }
     }
 }
@@ -455,7 +474,7 @@ impl WebSocketSender {
 //
 // This function returns handshake `HttpResponse`, ready to send to peer.
 // It does not perform any IO.
-fn handshake(req: &HttpRequest) -> Result<HttpResponseBuilder, HandshakeError> {
+pub fn handshake(req: &HttpRequest) -> Result<HttpResponseBuilder, HandshakeError> {
     handshake_with_protocols(req, &[])
 }
 
@@ -467,7 +486,7 @@ fn handshake(req: &HttpRequest) -> Result<HttpResponseBuilder, HandshakeError> {
 // `protocols` is a sequence of known protocols. On successful handshake,
 // the returned response headers contain the first protocol in this list
 // which the server also knows.
-fn handshake_with_protocols(
+pub fn handshake_with_protocols(
     req: &HttpRequest,
     protocols: &[&str],
 ) -> Result<HttpResponseBuilder, HandshakeError> {

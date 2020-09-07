@@ -10,6 +10,7 @@ pub struct ChatServer {
     rooms: HashMap<String, HashSet<usize>>,
 }
 
+/// a thread safe pointer for `ChatServer` that is pass to `actix_web::App::data` as shared state.
 #[derive(Clone, Default)]
 pub struct SharedChatServer(Arc<Mutex<ChatServer>>);
 
@@ -33,16 +34,25 @@ impl Default for ChatServer {
 }
 
 impl ChatServer {
-    /// Send message to all users in the room
-    pub fn send_message(&self, room: &str, message: &str, skip_id: usize) {
-        if let Some(sessions) = self.rooms.get(room) {
-            for id in sessions {
-                if *id != skip_id {
-                    if let Some(addr) = self.sessions.get(id) {
-                        let _ = addr.try_send(Message::Text(message.to_owned()));
-                    }
-                }
-            }
+    // Send message to all users in the room
+    pub fn send_message(&mut self, room: &str, message: &str, skip_id: usize) {
+        let ids = self.rooms.get(room).map(|sessions| {
+            sessions
+                .iter()
+                .filter(|id| **id != skip_id)
+                .filter_map(|id| self.sessions.get(id).map(|addr| (addr, id)))
+                .filter_map(|(addr, id)| {
+                    // collect try_send error session ids.
+                    addr.try_send(Message::Text(message.to_owned()))
+                        .err()
+                        .map(|_| *id)
+                })
+                .collect::<Vec<usize>>()
+        });
+
+        if let Some(ids) = ids {
+            // try_send only fail when websocket connection is gone so disconnect them.
+            ids.into_iter().for_each(|id| self.disconnect(id));
         }
     }
 
@@ -52,66 +62,54 @@ impl ChatServer {
         // notify all users in same room
         self.send_message(&"Main".to_owned(), "Someone joined", 0);
 
-        // register session with random id
-
         self.sessions.insert(id, tx);
 
         // auto join session to Main room
-        self.rooms
-            .entry("Main".to_owned())
-            .or_insert_with(HashSet::new)
-            .insert(id);
+        self.join_room(id, "Main");
     }
 
     pub fn disconnect(&mut self, id: usize) {
         println!("Someone disconnected");
 
-        let mut rooms: Vec<String> = Vec::new();
-
         // remove address
         if self.sessions.remove(&id).is_some() {
-            // remove session from all rooms
-            for (name, sessions) in &mut self.rooms {
-                if sessions.remove(&id) {
-                    rooms.push(name.to_owned());
-                }
-            }
-        }
-        // send message to other users
-        for room in rooms {
-            self.send_message(&room, "Someone disconnected", 0);
+            self.exit_rooms(id);
         }
     }
 
-    pub fn list_rooms(&self) -> Vec<&str> {
-        let mut rooms = Vec::new();
+    pub fn list_rooms(&self) -> Vec<String> {
+        self.rooms.keys().cloned().collect()
+    }
 
-        for key in self.rooms.keys() {
-            rooms.push(key.as_str())
-        }
-
-        rooms
+    fn join_room(&mut self, id: usize, name: &str) {
+        self.rooms
+            .entry(name.into())
+            .or_insert_with(HashSet::new)
+            .insert(id);
     }
 
     pub fn join(&mut self, id: usize, name: &str) {
-        let mut rooms = Vec::new();
+        self.exit_rooms(id);
 
-        // remove session from all rooms
-        for (n, sessions) in &mut self.rooms {
-            if sessions.remove(&id) {
-                rooms.push(n.to_owned());
-            }
-        }
-        // send message to other users
-        for room in rooms {
-            self.send_message(&room, "Someone disconnected", 0);
-        }
-
-        self.rooms
-            .entry(name.to_owned())
-            .or_insert_with(HashSet::new)
-            .insert(id);
+        self.join_room(id, name);
 
         self.send_message(&name, "Someone connected", id);
+    }
+
+    // remove id from all rooms and send message to other users.
+    fn exit_rooms(&mut self, id: usize) {
+        self.rooms
+            .iter_mut()
+            .filter_map(|(name, sessions)| {
+                if sessions.remove(&id) {
+                    Some(name.to_owned())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<String>>()
+            .into_iter()
+            // send message to other users
+            .for_each(|room| self.send_message(&room, "Someone disconnected", 0))
     }
 }

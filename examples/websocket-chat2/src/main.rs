@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use actix_files as fs;
-use actix_send_websocket::{CloseCode, Message, WebSocket, WsConfig};
+use actix_send_websocket::{CloseCode, Message, WebSocket, WebSocketSender, WsConfig};
 use actix_web::{
     get,
     web::{self, Data},
@@ -18,14 +18,40 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 /// How long before lack of client response causes a timeout
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
 
-// session information stores in request.
-pub struct WsChatSession {
+// session information stores in route handler.
+pub struct WsChatSession<'a> {
     /// unique session id
     pub id: usize,
     /// joined room
     pub room: String,
     /// peer name
     pub name: Option<String>,
+    /// a reference of shared chat server. So session can remove the tx from server when dropped.
+    pub server: &'a SharedChatServer,
+}
+
+impl<'a> WsChatSession<'a> {
+    fn new(server: &'a SharedChatServer, tx: WebSocketSender) -> Self {
+        let id = rand::random::<usize>();
+
+        // insert id and sender to chat server. It can be used to send message directly to client from
+        // other threads and/or websocket connections.
+        server.get().connect(id, tx);
+
+        Self {
+            id,
+            room: "Main".to_string(),
+            name: None,
+            server,
+        }
+    }
+}
+
+/// Notify server disconnect when dropping.
+impl Drop for WsChatSession<'_> {
+    fn drop(&mut self) {
+        self.server.get().disconnect(self.id);
+    }
 }
 
 /// Entry point for our route
@@ -36,19 +62,11 @@ async fn chat_route(server: Data<SharedChatServer>, websocket: WebSocket) -> imp
     // tx is the sender to add message to response.
     let (mut stream, res, mut tx) = websocket.into_parts();
 
-    // construct a session.
-    let mut session = WsChatSession {
-        id: rand::random::<usize>(),
-        room: "Main".to_string(),
-        name: None,
-    };
-
-    // insert id and sender to chat server. It can be used to send message directly to client from
-    // other threads and/or websocket connections.
-    server.get().connect(session.id, tx.clone());
-
     // spawn the message handling future so we don't block our response to client.
     actix_web::rt::spawn(async move {
+        // construct a session.
+        let mut session = WsChatSession::new(&*server, tx.clone());
+
         while let Some(res) = stream.next().await {
             let msg = res.unwrap_or_else(|_| Message::Close(Some(CloseCode::Protocol.into())));
 
@@ -63,12 +81,7 @@ async fn chat_route(server: Data<SharedChatServer>, websocket: WebSocket) -> imp
                         match v[0] {
                             "/list" => {
                                 println!("List rooms");
-                                let rooms = server
-                                    .get()
-                                    .list_rooms()
-                                    .into_iter()
-                                    .map(|text| text.into())
-                                    .collect::<Vec<String>>();
+                                let rooms = server.get().list_rooms();
 
                                 for room in rooms.into_iter() {
                                     if tx.text(room).await.is_err() {
@@ -132,14 +145,11 @@ async fn chat_route(server: Data<SharedChatServer>, websocket: WebSocket) -> imp
                 Message::Nop => Ok(()),
             };
 
-            // send is failed because response is gone so we should end the stream.
+            // send is failed because client response is gone so we should end the stream.
             if res.is_err() {
                 break;
             }
         }
-
-        // we are disconnected. remove the tx of session.
-        server.get().disconnect(session.id);
     });
 
     res
@@ -153,11 +163,14 @@ async fn main() -> std::io::Result<()> {
     // Create Http server with websocket support
     HttpServer::new(move || {
         App::new()
+            // pass shared chat server as app state.
             .data(server.clone())
+            // config for websocket behavior. if not presented a default one would be used.
             .app_data(
                 WsConfig::new()
                     .heartbeat(HEARTBEAT_INTERVAL)
                     .timeout(CLIENT_TIMEOUT)
+                    // heartbeat is disabled for testing purpose.
                     .disable_heartbeat(),
             )
             // redirect to websocket.html
