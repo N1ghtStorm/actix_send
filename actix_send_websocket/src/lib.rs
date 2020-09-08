@@ -41,9 +41,9 @@
 //! #[actix_web::main]
 //! async fn main() -> std::io::Result<()> {
 //!     HttpServer::new(|| App::new().service(ws))
-//!     .bind("127.0.0.1:8080")?
-//!     .run()
-//!     .await
+//!         .bind("127.0.0.1:8080")?
+//!         .run()
+//!         .await
 //! }
 //! ```
 
@@ -68,17 +68,16 @@ use actix_codec::{Decoder, Encoder};
 use actix_utils::task::LocalWaker;
 use actix_web::{
     dev::{HttpResponseBuilder, Payload},
-    error::Error,
+    error::{Error, ErrorInternalServerError},
     http::{header, Method, StatusCode},
     rt,
     web::{Bytes, BytesMut, Data},
     FromRequest, HttpRequest, HttpResponse,
 };
-use futures_channel::mpsc::{TrySendError, UnboundedReceiver, UnboundedSender};
+use futures_util::sink::Sink;
 use futures_util::{
     future::{err, ok, Ready},
     stream::Stream,
-    SinkExt,
 };
 use pin_project::pin_project;
 
@@ -166,6 +165,7 @@ pub struct WebSocket(
 );
 
 impl WebSocket {
+    #[inline]
     pub fn into_parts(self) -> (DecodeStream<Payload>, HttpResponse, WebSocketSender) {
         (self.0, self.1, self.2)
     }
@@ -197,7 +197,7 @@ pub fn split_stream<S>(
     cfg: &WsConfig,
     stream: S,
 ) -> (DecodeStream<S>, EncodeStream, WebSocketSender) {
-    let (tx, rx) = futures_channel::mpsc::unbounded();
+    let (tx, rx) = channel::channel();
     let tx = WebSocketSender(tx);
 
     let manager = DecodeStreamManager::new(cfg.heartbeat, cfg.timeout, tx.clone()).start();
@@ -314,7 +314,7 @@ where
 }
 
 pub struct EncodeStream {
-    rx: UnboundedReceiver<Message>,
+    rx: channel::Receiver<Message>,
     codec: Codec,
     buf: BytesMut,
 }
@@ -354,6 +354,7 @@ impl Drop for DecodeStreamManager {
 }
 
 impl DecodeStreamManager {
+    #[inline]
     fn new(interval: Option<Duration>, timeout: Duration, tx: WebSocketSender) -> Self {
         Self {
             decode_stream_waker: Rc::new(RefCell::new(Default::default())),
@@ -380,7 +381,7 @@ impl DecodeStreamManager {
                         break;
                     }
                     // quit when encode stream is gone
-                    if this.tx.0.is_closed() {
+                    if this.tx.is_closed() {
                         break;
                     }
                 }
@@ -411,32 +412,37 @@ impl DecodeStreamManager {
 }
 
 #[derive(Clone)]
-pub struct WebSocketSender(UnboundedSender<Message>);
+pub struct WebSocketSender(channel::Sender<Message>);
+
+impl Sink<Message> for WebSocketSender {
+    type Error = Error;
+
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.get_mut().0)
+            .poll_ready(cx)
+            .map_err(ErrorInternalServerError)
+    }
+
+    fn start_send(self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
+        Pin::new(&mut self.get_mut().0)
+            .start_send(item)
+            .map_err(ErrorInternalServerError)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.get_mut().0)
+            .poll_flush(cx)
+            .map_err(ErrorInternalServerError)
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.get_mut().0)
+            .poll_close(cx)
+            .map_err(ErrorInternalServerError)
+    }
+}
 
 impl WebSocketSender {
-    /// send the message asynchronously.
-    pub async fn send(&mut self, message: Message) -> Result<(), Error> {
-        self.0
-            .send(message)
-            .await
-            .map_err(actix_web::error::ErrorInternalServerError)
-    }
-
-    /// send the message synchronously. The send would fail only when the receive part is closed.
-    ///
-    /// The returned Error type is `futures_channel::mpsc::TrySendError`.
-    ///
-    /// *. It's suggested call `into_inner` and get the message that failed to sent instead  of
-    /// importing the error type from said crate.
-    pub fn try_send(&self, message: Message) -> Result<(), TrySendError<Message>> {
-        self.0.unbounded_send(message)
-    }
-
-    #[deprecated(note = "please use try_send instead")]
-    pub fn unbounded_send(&self, message: Message) -> Result<(), TrySendError<Message>> {
-        self.try_send(message)
-    }
-
     /// Send text frame
     #[inline]
     pub async fn text(&mut self, text: impl Into<String>) -> Result<(), Error> {
@@ -561,6 +567,83 @@ pub fn handshake_with_protocols(
     }
 
     Ok(response)
+}
+
+#[cfg(feature = "send")]
+#[cfg(not(feature = "no-send"))]
+mod channel {
+    use super::{Error, ErrorInternalServerError, Message};
+
+    use futures_util::SinkExt;
+
+    pub(super) use futures_channel::mpsc::{
+        UnboundedReceiver as Receiver, UnboundedSender as Sender,
+    };
+
+    pub(super) fn channel<T>() -> (Sender<T>, Receiver<T>) {
+        futures_channel::mpsc::unbounded()
+    }
+
+    impl super::WebSocketSender {
+        /// send the message asynchronously.
+        pub async fn send(&mut self, message: Message) -> Result<(), Error> {
+            self.0.send(message).await.map_err(ErrorInternalServerError)
+        }
+
+        /// send the message synchronously. The send would fail only when the receive part is closed.
+        ///
+        /// The returned Error type is `futures_channel::mpsc::TrySendError`.
+        ///
+        /// *. It's suggested call `into_inner` and get the message that failed to sent instead  of
+        /// importing the error type from said crate.
+        pub fn try_send(
+            &self,
+            message: Message,
+        ) -> Result<(), futures_channel::mpsc::TrySendError<Message>> {
+            self.0.unbounded_send(message)
+        }
+
+        pub fn is_closed(&self) -> bool {
+            self.0.is_closed()
+        }
+    }
+}
+
+#[cfg(feature = "no-send")]
+#[cfg(not(feature = "send"))]
+mod channel {
+    use super::{Error, ErrorInternalServerError, Message};
+
+    pub(super) use actix_utils::mpsc::{Receiver, Sender};
+
+    pub(super) fn channel<T>() -> (Sender<T>, Receiver<T>) {
+        actix_utils::mpsc::channel()
+    }
+
+    impl super::WebSocketSender {
+        /// send the message asynchronously.
+        pub async fn send(&mut self, message: Message) -> Result<(), Error> {
+            self.0.send(message).map_err(ErrorInternalServerError)
+        }
+
+        /// send the message synchronously. The send would fail only when the receive part is closed.
+        ///
+        /// The returned Error type is `actix_utils::mpsc::SendError`.
+        ///
+        /// *. It's suggested call `into_inner` and get the message that failed to sent instead  of
+        /// importing the error type from said crate.
+        pub fn try_send(
+            &self,
+            message: Message,
+        ) -> Result<(), actix_utils::mpsc::SendError<Message>> {
+            self.0.send(message)
+        }
+
+        // placeholder method.
+        pub fn is_closed(&self) -> bool {
+            false
+        }
+    }
 }
 
 #[cfg(test)]

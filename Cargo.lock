@@ -376,7 +376,7 @@ dependencies = [
 [[package]]
 name = "actix_send_macros"
 version = "0.1.0"
-source = "git+https://github.com/fakeshadow/actix_send.git#eaa4749a78e928ac37aa2e318e0ba24fd29200fa"
+source = "git+https://github.com/fakeshadow/actix_send.git#8fa2a9e67892f390c9db78b820b9b499e587a3c0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -395,10 +395,11 @@ dependencies = [
 [[package]]
 name = "actix_send_websocket"
 version = "0.1.0"
-source = "git+https://github.com/fakeshadow/actix_send.git#eaa4749a78e928ac37aa2e318e0ba24fd29200fa"
+source = "git+https://github.com/fakeshadow/actix_send.git#8fa2a9e67892f390c9db78b820b9b499e587a3c0"
 dependencies = [
  "actix-codec 0.2.0",
  "actix-http",
+ "actix-utils 2.0.0",
  "actix-web",
  "futures-channel",
  "futures-util",
@@ -409,7 +410,6 @@ dependencies = [
 name = "actix_send_websocket"
 version = "0.1.0"
 dependencies = [
- "actix",
  "actix-codec 0.2.0",
  "actix-http",
  "actix-rt",
@@ -506,9 +506,9 @@ dependencies = [
 
 [[package]]
 name = "async-mutex"
-version = "1.2.0"
+version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "065de1ccf10280d0d75c2f3a71a970ee1007c85c51aa3e7deee1df100f1dfadb"
+checksum = "66941c2577c4fa351e4ce5fdde8f86c69b88d623f3b955be1bc7362a23434632"
 dependencies = [
  "event-listener",
 ]
@@ -1427,9 +1427,9 @@ dependencies = [
 
 [[package]]
 name = "net2"
-version = "0.2.34"
+version = "0.2.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ba7c918ac76704fb42afcbbb43891e72731f3dcca3bef2a19786297baf14af7"
+checksum = "3ebc3ec692ed7c9a255596c67808dee269f64655d8baf7b4f0638e51ba1d6853"
 dependencies = [
  "cfg-if",
  "libc",
@@ -1979,9 +1979,9 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.2.17"
+version = "0.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca7ec98a72285d12e0febb26f0847b12d54be24577618719df654c66cadab55d"
+checksum = "12785163ae8a1cbb52a5db39af4a5baabd3fe49f07f76f952f89d7e89e5ce531"
 dependencies = [
  "const_fn",
  "libc",
@@ -2098,9 +2098,9 @@ dependencies = [
 
 [[package]]
 name = "tracing-core"
-version = "0.1.15"
+version = "0.1.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f0e00789804e99b20f12bc7003ca416309d28a6f495d6af58d1e2c2842461b5"
+checksum = "5bcf46c1f1f06aeea2d6b81f3c863d0930a596c86ad1920d4e5bad6dd1d7119a"
 dependencies = [
  "lazy_static",
 ]
@@ -2344,6 +2344,7 @@ name = "websocket-chat2"
 version = "0.1.0"
 dependencies = [
  "actix-files",
+ "actix-tls",
  "actix-web",
  "actix_send_websocket 0.1.0 (git+https://github.com/fakeshadow/actix_send.git)",
  "futures-util",
