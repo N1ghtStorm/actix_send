@@ -101,6 +101,7 @@ use pin_project::pin_project;
 #[derive(Clone)]
 pub struct WsConfig {
     codec: Option<Codec>,
+    protocols: Option<Vec<String>>,
     heartbeat: Option<Duration>,
     timeout: Duration,
 }
@@ -113,6 +114,15 @@ impl WsConfig {
     /// Set WebSockets protocol codec.
     pub fn codec(mut self, codec: Codec) -> Self {
         self.codec = Some(codec);
+        self
+    }
+
+    /// Set specific protocol strings.
+    /// `protocols` is a sequence of known protocols. On successful handshake,
+    /// the returned response headers contain the first protocol in this list
+    /// which the server also knows.
+    pub fn protocols(mut self, protocols: Vec<String>) -> Self {
+        self.protocols = Some(protocols);
         self
     }
 
@@ -147,6 +157,7 @@ impl WsConfig {
 // ToDo: make Codec use const constructor.
 const DEFAULT_CONFIG: WsConfig = WsConfig {
     codec: None,
+    protocols: None,
     heartbeat: Some(Duration::from_secs(5)),
     timeout: Duration::from_secs(10),
 };
@@ -177,11 +188,18 @@ impl FromRequest for WebSocket {
     type Config = WsConfig;
 
     fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
-        let mut res = match handshake(&req) {
+        let cfg = Self::Config::from_req(req);
+
+        let protocols = match cfg.protocols {
+            Some(ref protocols) => protocols.iter().map(|f| f.as_str()).collect::<Vec<_>>(),
+            None => Vec::with_capacity(0),
+        };
+
+        let mut res = match handshake_with_protocols(&req, &protocols) {
             Ok(res) => res,
             Err(e) => return err(e.into()),
         };
-        let cfg = Self::Config::from_req(req);
+
         let stream = payload.take();
 
         let (decode, encode, tx) = split_stream(cfg, stream);
@@ -200,24 +218,23 @@ pub fn split_stream<S>(
     let (tx, rx) = channel::channel();
     let tx = WebSocketSender(tx);
 
-    let manager = DecodeStreamManager::new(cfg.heartbeat, cfg.timeout, tx.clone()).start();
     let codec = cfg.codec.unwrap_or_else(Codec::new);
 
-    let decode = DecodeStream {
-        closed: false,
-        manager,
-        stream,
-        codec,
-        buf: Default::default(),
-    };
-
-    let encode = EncodeStream {
-        rx,
-        codec,
-        buf: Default::default(),
-    };
-
-    (decode, encode, tx)
+    (
+        DecodeStream {
+            closed: false,
+            manager: DecodeStreamManager::new(cfg.heartbeat, cfg.timeout, tx.clone()).start(),
+            stream,
+            codec,
+            buf: Default::default(),
+        },
+        EncodeStream {
+            rx,
+            codec,
+            buf: Default::default(),
+        },
+        tx,
+    )
 }
 
 // decode incoming stream.
@@ -366,6 +383,7 @@ impl DecodeStreamManager {
         }
     }
 
+    #[inline]
     fn start(self) -> Self {
         if let Some(interval) = self.interval {
             let this = self.clone();

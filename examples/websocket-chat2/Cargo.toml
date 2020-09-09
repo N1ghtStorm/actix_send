@@ -15,3 +15,5 @@ actix_send_websocket = { git = "https://github.com/fakeshadow/actix_send.git" }
 futures-util = { version = "0.3.5", default-features = false }
 rand = "0.7.3"
 actix-tls = "=2.0.0-alpha.2"
+
+futures-channel = ""
