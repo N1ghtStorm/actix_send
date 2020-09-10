@@ -195,18 +195,14 @@ impl FromRequest for WebSocket {
             None => Vec::with_capacity(0),
         };
 
-        let mut res = match handshake_with_protocols(&req, &protocols) {
-            Ok(res) => res,
-            Err(e) => return err(e.into()),
-        };
-
-        let stream = payload.take();
-
-        let (decode, encode, tx) = split_stream(cfg, stream);
-
-        let response = res.streaming(encode);
-
-        ok(WebSocket(decode, response, tx))
+        match handshake_with_protocols(&req, &protocols) {
+            Ok(mut res) => {
+                let stream = payload.take();
+                let (decode, encode, tx) = split_stream(cfg, stream);
+                ok(WebSocket(decode, res.streaming(encode), tx))
+            },
+            Err(e) => err(e.into()),
+        }
     }
 }
 

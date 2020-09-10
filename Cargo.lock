@@ -98,16 +98,16 @@ dependencies = [
 
 [[package]]
 name = "actix-http"
-version = "2.0.0-beta.3"
+version = "2.0.0-beta.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab2f035e3f5b0e336abf92a78097c430b7781d2b032ded1142d77ab62ed0b786"
+checksum = "a10621f225411d86d5aa703da1cd11c93c0fdf4c3e07806997f6991732dc048c"
 dependencies = [
- "actix-codec 0.2.0",
+ "actix-codec 0.3.0",
  "actix-connect",
  "actix-rt",
  "actix-service",
  "actix-threadpool",
- "actix-utils 1.0.6",
+ "actix-utils 2.0.0",
  "base64",
  "bitflags",
  "brotli2",
@@ -242,18 +242,14 @@ dependencies = [
 
 [[package]]
 name = "actix-tls"
-version = "2.0.0-alpha.2"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28b661e9c27e48b6f7ef4673359ac1c6d4eed503c1170c874cc05ea2cca3952a"
+checksum = "24789b7d7361cf5503a504ebe1c10806896f61e96eca9a7350e23001aca715fb"
 dependencies = [
- "actix-codec 0.2.0",
- "actix-rt",
+ "actix-codec 0.3.0",
  "actix-service",
- "actix-utils 1.0.6",
- "derive_more",
- "either",
+ "actix-utils 2.0.0",
  "futures-util",
- "log",
 ]
 
 [[package]]
@@ -296,11 +292,11 @@ dependencies = [
 
 [[package]]
 name = "actix-web"
-version = "3.0.0-beta.3"
+version = "3.0.0-beta.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9522b04c5a43b806d8a445946bd2b9906d2948cf8b439521236afd49898dae96"
+checksum = "fbfafbef7fc52b38836bf9d976dbfa57331eb3491f46529a3b31f6b18c756007"
 dependencies = [
- "actix-codec 0.2.0",
+ "actix-codec 0.3.0",
  "actix-http",
  "actix-macros",
  "actix-router",
@@ -310,7 +306,7 @@ dependencies = [
  "actix-testing",
  "actix-threadpool",
  "actix-tls",
- "actix-utils 1.0.6",
+ "actix-utils 2.0.0",
  "actix-web-codegen",
  "awc",
  "bytes",
@@ -376,7 +372,6 @@ dependencies = [
 [[package]]
 name = "actix_send_macros"
 version = "0.1.0"
-source = "git+https://github.com/fakeshadow/actix_send.git#8fa2a9e67892f390c9db78b820b9b499e587a3c0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -386,6 +381,7 @@ dependencies = [
 [[package]]
 name = "actix_send_macros"
 version = "0.1.0"
+source = "git+https://github.com/fakeshadow/actix_send.git#1eb376d6c20065fda05985d545850cced1298ae8"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -395,10 +391,10 @@ dependencies = [
 [[package]]
 name = "actix_send_websocket"
 version = "0.1.0"
-source = "git+https://github.com/fakeshadow/actix_send.git#8fa2a9e67892f390c9db78b820b9b499e587a3c0"
 dependencies = [
- "actix-codec 0.2.0",
+ "actix-codec 0.3.0",
  "actix-http",
+ "actix-rt",
  "actix-utils 2.0.0",
  "actix-web",
  "futures-channel",
@@ -409,10 +405,10 @@ dependencies = [
 [[package]]
 name = "actix_send_websocket"
 version = "0.1.0"
+source = "git+https://github.com/fakeshadow/actix_send.git#1eb376d6c20065fda05985d545850cced1298ae8"
 dependencies = [
  "actix-codec 0.2.0",
  "actix-http",
- "actix-rt",
  "actix-utils 2.0.0",
  "actix-web",
  "futures-channel",
@@ -573,11 +569,11 @@ checksum = "cdb031dd78e28731d87d56cc8ffef4a8f36ca26c38fe2de700543e627f8a464a"
 
 [[package]]
 name = "awc"
-version = "2.0.0-beta.3"
+version = "2.0.0-beta.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f5ab128e1a3336cec127edf2631d23503dce2141a9e4670b796b3136b9f21ea"
+checksum = "96f8e83028cb7516a0f84ec64870681521fc0ce66c860595e84948fcd3a8af3b"
 dependencies = [
- "actix-codec 0.2.0",
+ "actix-codec 0.3.0",
  "actix-http",
  "actix-rt",
  "actix-service",
@@ -1215,9 +1211,9 @@ checksum = "dc6f3ad7b9d11a0c00842ff8de1b60ee58661048eb8049ed33c73594f359d7e6"
 
 [[package]]
 name = "js-sys"
-version = "0.3.44"
+version = "0.3.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85a7e2c92a4804dd459b86c339278d0fe87cf93757fae222c3fa3ae75458bc73"
+checksum = "ca059e81d9486668f12d455a4ea6daa600bd408134cd17e3d3fb5a32d1f016f8"
 dependencies = [
  "wasm-bindgen",
 ]
@@ -2265,9 +2261,9 @@ checksum = "cccddf32554fecc6acb585f82a32a72e28b48f8c4c1883ddfeeeaa96f7d8e519"
 
 [[package]]
 name = "wasm-bindgen"
-version = "0.2.67"
+version = "0.2.68"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f0563a9a4b071746dd5aedbc3a28c6fe9be4586fb3fbadb67c400d4f53c6b16c"
+checksum = "1ac64ead5ea5f05873d7c12b545865ca2b8d28adfc50a49b84770a3a97265d42"
 dependencies = [
  "cfg-if",
  "wasm-bindgen-macro",
@@ -2275,9 +2271,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-backend"
-version = "0.2.67"
+version = "0.2.68"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc71e4c5efa60fb9e74160e89b93353bc24059999c0ae0fb03affc39770310b0"
+checksum = "f22b422e2a757c35a73774860af8e112bff612ce6cb604224e8e47641a9e4f68"
 dependencies = [
  "bumpalo",
  "lazy_static",
@@ -2290,9 +2286,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-futures"
-version = "0.4.17"
+version = "0.4.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95f8d235a77f880bcef268d379810ea6c0af2eacfa90b1ad5af731776e0c4699"
+checksum = "b7866cab0aa01de1edf8b5d7936938a7e397ee50ce24119aef3e1eaa3b6171da"
 dependencies = [
  "cfg-if",
  "js-sys",
@@ -2302,9 +2298,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-macro"
-version = "0.2.67"
+version = "0.2.68"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97c57cefa5fa80e2ba15641578b44d36e7a64279bc5ed43c6dbaf329457a2ed2"
+checksum = "6b13312a745c08c469f0b292dd2fcd6411dba5f7160f593da6ef69b64e407038"
 dependencies = [
  "quote",
  "wasm-bindgen-macro-support",
@@ -2312,9 +2308,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-macro-support"
-version = "0.2.67"
+version = "0.2.68"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "841a6d1c35c6f596ccea1f82504a192a60378f64b3bb0261904ad8f2f5657556"
+checksum = "f249f06ef7ee334cc3b8ff031bfc11ec99d00f34d86da7498396dc1e3b1498fe"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2325,15 +2321,15 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-shared"
-version = "0.2.67"
+version = "0.2.68"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93b162580e34310e5931c4b792560108b10fd14d64915d7fff8ff00180e70092"
+checksum = "1d649a3145108d7d3fbcde896a468d1bd636791823c9921135218ad89be08307"
 
 [[package]]
 name = "web-sys"
-version = "0.3.44"
+version = "0.3.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dda38f4e5ca63eda02c059d243aa25b5f35ab98451e518c51612cd0f1bd19a47"
+checksum = "4bf6ef87ad7ae8008e15a355ce696bed26012b7caa21605188cfd8214ab51e2d"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
@@ -2344,10 +2340,8 @@ name = "websocket-chat2"
 version = "0.1.0"
 dependencies = [
  "actix-files",
- "actix-tls",
  "actix-web",
  "actix_send_websocket 0.1.0 (git+https://github.com/fakeshadow/actix_send.git)",
- "futures-channel",
  "futures-util",
  "rand",
 ]

@@ -10,10 +10,10 @@ send = ["futures-channel"]
 no-send = []
 
 [dependencies]
-actix-codec = "0.2.0"
-actix-http = "2.0.0-beta.3"
+actix-codec = "0.3.0"
+actix-http = "2.0.0-beta.4"
 actix-utils = "2.0.0"
-actix-web = { version = "3.0.0-beta.3", default-features = false }
+actix-web = { version = "3.0.0-beta.4", default-features = false }
 futures-channel = { version = "0.3.5", default-features = false, optional = true }
 futures-util = { version = "0.3.5", default-features = false }
 pin-project = "0.4.23"
