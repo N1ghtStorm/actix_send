@@ -12,6 +12,7 @@
 fn main() {
     #[cfg(feature = "actix-runtime-local")]
     fn _main() {
+        use std::rc::Rc;
         use std::time::Instant;
 
         use actix_send::prelude::*;
@@ -22,6 +23,7 @@ fn main() {
         #[actor(no_send)]
         pub struct ActixSendActor {
             pub file: File,
+            pub state: Rc<usize>,
         }
 
         pub struct Ping;
@@ -38,7 +40,10 @@ fn main() {
         actix_rt::System::new("actix-test").block_on(async {
             let builder = ActixSendActor::builder(move || async move {
                 let file = File::open("./sample/sample.txt").await.unwrap();
-                ActixSendActor { file }
+                ActixSendActor {
+                    file,
+                    state: Rc::new(0),
+                }
             });
 
             let address = builder.start().await;

@@ -200,7 +200,7 @@ impl FromRequest for WebSocket {
                 let stream = payload.take();
                 let (decode, encode, tx) = split_stream(cfg, stream);
                 ok(WebSocket(decode, res.streaming(encode), tx))
-            },
+            }
             Err(e) => err(e.into()),
         }
     }
