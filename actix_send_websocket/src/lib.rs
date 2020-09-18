@@ -103,6 +103,7 @@ pub struct WsConfig {
     codec: Option<Codec>,
     protocols: Option<Vec<String>>,
     heartbeat: Option<Duration>,
+    server_send_heartbeat: bool,
     timeout: Duration,
 }
 
@@ -144,6 +145,12 @@ impl WsConfig {
         self
     }
 
+    /// Enable the heartbeat from Server side to Client.
+    pub fn enable_server_send_heartbeat(mut self) -> Self {
+        self.server_send_heartbeat = true;
+        self
+    }
+
     /// Extract WsConfig config from app data. Check both `T` and `Data<T>`, in that order, and fall
     /// back to the default payload config.
     fn from_req(req: &HttpRequest) -> &Self {
@@ -159,6 +166,7 @@ const DEFAULT_CONFIG: WsConfig = WsConfig {
     codec: None,
     protocols: None,
     heartbeat: Some(Duration::from_secs(5)),
+    server_send_heartbeat: false,
     timeout: Duration::from_secs(10),
 };
 
@@ -219,7 +227,7 @@ pub fn split_stream<S>(
     (
         DecodeStream {
             closed: false,
-            manager: DecodeStreamManager::new(cfg.heartbeat, cfg.timeout, tx.clone()).start(),
+            manager: DecodeStreamManager::new(cfg.heartbeat, cfg.timeout, cfg.server_send_heartbeat, tx.clone()).start(),
             stream,
             codec,
             buf: Default::default(),
@@ -313,10 +321,13 @@ where
                     ),
                     Frame::Binary(data) => Message::Binary(data),
                     Frame::Ping(s) => {
-                        this.manager.update_heartbeat();
+                        this.manager.update_heartbeat_ping();
                         Message::Ping(s)
                     }
-                    Frame::Pong(s) => Message::Pong(s),
+                    Frame::Pong(s) => {
+                        this.manager.update_heartbeat_pong();
+                        Message::Pong(s)
+                    },
                     Frame::Close(reason) => Message::Close(reason),
                     Frame::Continuation(item) => Message::Continuation(item),
                 };
@@ -353,6 +364,7 @@ impl Stream for EncodeStream {
 struct DecodeStreamManager {
     decode_stream_waker: Rc<RefCell<LocalWaker>>,
     enable_heartbeat: bool,
+    server_send_heartbeat: bool,
     interval: Option<Duration>,
     timeout: Duration,
     heartbeat: Rc<RefCell<Instant>>,
@@ -368,10 +380,11 @@ impl Drop for DecodeStreamManager {
 
 impl DecodeStreamManager {
     #[inline]
-    fn new(interval: Option<Duration>, timeout: Duration, tx: WebSocketSender) -> Self {
+    fn new(interval: Option<Duration>, timeout: Duration, server_send_heartbeat: bool, tx: WebSocketSender) -> Self {
         Self {
             decode_stream_waker: Rc::new(RefCell::new(Default::default())),
             enable_heartbeat: interval.is_some(),
+            server_send_heartbeat,
             interval,
             timeout,
             heartbeat: Rc::new(RefCell::new(Instant::now())),
@@ -382,10 +395,11 @@ impl DecodeStreamManager {
     #[inline]
     fn start(self) -> Self {
         if let Some(interval) = self.interval {
-            let this = self.clone();
+            let mut this = self.clone();
             rt::spawn(async move {
                 loop {
                     rt::time::delay_for(interval).await;
+
                     // quit when timed out.
                     if this.is_timeout() {
                         break;
@@ -397,6 +411,13 @@ impl DecodeStreamManager {
                     // quit when encode stream is gone
                     if this.tx.is_closed() {
                         break;
+                    }
+
+                    // send ping to client
+                    if this.server_send_heartbeat {
+                        if this.tx.ping(b"ping").await.is_err() {
+                            break;
+                        }
                     }
                 }
             });
@@ -418,10 +439,21 @@ impl DecodeStreamManager {
         }
     }
 
-    fn update_heartbeat(&self) {
+    fn update_heartbeat_ping(&self) {
         if self.enable_heartbeat {
-            *self.heartbeat.borrow_mut() = Instant::now();
+            self.update_heartbeat();
         }
+    }
+
+    // Determine if we update heartbeat when a Pong message is received.
+    fn update_heartbeat_pong(&self) {
+        if self.server_send_heartbeat {
+            self.update_heartbeat();
+        }
+    }
+
+    fn update_heartbeat(&self) {
+        *self.heartbeat.borrow_mut() = Instant::now();
     }
 }
 

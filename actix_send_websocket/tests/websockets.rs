@@ -94,3 +94,30 @@ async fn test_heartbeat() {
     let item = framed.next().await;
     assert!(item.is_none());
 }
+
+#[actix_rt::test]
+async fn test_server_send_heartbeat() {
+    let mut srv = test::start(|| {
+        App::new()
+            .app_data(
+                WsConfig::new()
+                    .heartbeat(Duration::from_millis(500))
+                    .enable_server_send_heartbeat()
+                    .timeout(Duration::from_secs(1)),
+            )
+            .service(handler)
+    });
+
+    let mut framed = srv.ws().await.unwrap();
+
+    let item = framed.next().await.unwrap().unwrap();
+    assert_eq!(item, Frame::Ping(Bytes::from_static(b"ping")));
+
+    actix_rt::time::delay_for(Duration::from_secs(2)).await;
+
+    let item = framed.next().await.unwrap().unwrap();
+    assert_eq!(item, Frame::Close(Some(CloseCode::Normal.into())));
+
+    let item = framed.next().await;
+    assert!(item.is_none());
+}
