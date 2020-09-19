@@ -205,8 +205,7 @@ impl FromRequest for WebSocket {
 
         match handshake_with_protocols(&req, &protocols) {
             Ok(mut res) => {
-                let stream = payload.take();
-                let (decode, encode, tx) = split_stream(cfg, stream);
+                let (decode, encode, tx) = split_stream(cfg, payload.take());
                 ok(WebSocket(decode, res.streaming(encode), tx))
             }
             Err(e) => err(e.into()),
@@ -227,7 +226,13 @@ pub fn split_stream<S>(
     (
         DecodeStream {
             closed: false,
-            manager: DecodeStreamManager::new(cfg.heartbeat, cfg.timeout, cfg.server_send_heartbeat, tx.clone()).start(),
+            manager: DecodeStreamManager::new(
+                cfg.heartbeat,
+                cfg.timeout,
+                cfg.server_send_heartbeat,
+                tx.clone(),
+            )
+            .start(),
             stream,
             codec,
             buf: Default::default(),
@@ -277,62 +282,46 @@ where
                 .register(cx.waker());
         }
 
-        if !*this.closed {
-            loop {
-                this = self.as_mut().project();
-                match Pin::new(&mut this.stream).poll_next(cx) {
-                    Poll::Ready(Some(Ok(chunk))) => {
-                        this.buf.extend_from_slice(&chunk[..]);
+        match Pin::new(&mut this.stream).poll_next(cx) {
+            Poll::Ready(Some(Ok(chunk))) => {
+                this.buf.extend(&chunk);
+                match this.codec.decode(this.buf) {
+                    Ok(Some(frame)) => {
+                        let msg = match frame {
+                            Frame::Text(data) => Message::Text(
+                                std::str::from_utf8(&data)
+                                    .map_err(|e| {
+                                        ProtocolError::Io(io::Error::new(
+                                            io::ErrorKind::Other,
+                                            format!("{}", e),
+                                        ))
+                                    })?
+                                    .to_string(),
+                            ),
+                            Frame::Binary(data) => Message::Binary(data),
+                            Frame::Ping(s) => {
+                                this.manager.update_heartbeat_ping();
+                                Message::Ping(s)
+                            }
+                            Frame::Pong(s) => {
+                                this.manager.update_heartbeat_pong();
+                                Message::Pong(s)
+                            }
+                            Frame::Close(reason) => Message::Close(reason),
+                            Frame::Continuation(item) => Message::Continuation(item),
+                        };
+                        Poll::Ready(Some(Ok(msg)))
                     }
-                    Poll::Ready(None) => {
-                        *this.closed = true;
-                        break;
-                    }
-                    Poll::Pending => break,
-                    Poll::Ready(Some(Err(e))) => {
-                        return Poll::Ready(Some(Err(ProtocolError::Io(io::Error::new(
-                            io::ErrorKind::Other,
-                            format!("{}", e),
-                        )))));
-                    }
+                    Ok(None) => Poll::Pending,
+                    Err(e) => Poll::Ready(Some(Err(e))),
                 }
             }
-        }
-
-        match this.codec.decode(this.buf)? {
-            None => {
-                if *this.closed {
-                    Poll::Ready(None)
-                } else {
-                    Poll::Pending
-                }
-            }
-            Some(frm) => {
-                let msg = match frm {
-                    Frame::Text(data) => Message::Text(
-                        std::str::from_utf8(&data)
-                            .map_err(|e| {
-                                ProtocolError::Io(io::Error::new(
-                                    io::ErrorKind::Other,
-                                    format!("{}", e),
-                                ))
-                            })?
-                            .to_string(),
-                    ),
-                    Frame::Binary(data) => Message::Binary(data),
-                    Frame::Ping(s) => {
-                        this.manager.update_heartbeat_ping();
-                        Message::Ping(s)
-                    }
-                    Frame::Pong(s) => {
-                        this.manager.update_heartbeat_pong();
-                        Message::Pong(s)
-                    },
-                    Frame::Close(reason) => Message::Close(reason),
-                    Frame::Continuation(item) => Message::Continuation(item),
-                };
-                Poll::Ready(Some(Ok(msg)))
-            }
+            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(ProtocolError::Io(io::Error::new(
+                io::ErrorKind::Other,
+                format!("{}", e),
+            ))))),
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
         }
     }
 }
@@ -380,7 +369,12 @@ impl Drop for DecodeStreamManager {
 
 impl DecodeStreamManager {
     #[inline]
-    fn new(interval: Option<Duration>, timeout: Duration, server_send_heartbeat: bool, tx: WebSocketSender) -> Self {
+    fn new(
+        interval: Option<Duration>,
+        timeout: Duration,
+        server_send_heartbeat: bool,
+        tx: WebSocketSender,
+    ) -> Self {
         Self {
             decode_stream_waker: Rc::new(RefCell::new(Default::default())),
             enable_heartbeat: interval.is_some(),
@@ -414,10 +408,8 @@ impl DecodeStreamManager {
                     }
 
                     // send ping to client
-                    if this.server_send_heartbeat {
-                        if this.tx.ping(b"ping").await.is_err() {
-                            break;
-                        }
+                    if this.server_send_heartbeat && this.tx.ping(b"ping").await.is_err() {
+                        break;
                     }
                 }
             });
