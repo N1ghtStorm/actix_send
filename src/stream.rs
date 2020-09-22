@@ -60,10 +60,10 @@ where
     type Item = Result<<M as MapResult<A::Result>>::Output, ActixSendError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut this = self.project();
+        let this = self.project();
 
         match this.state {
-            ActorStreamState::Next => match this.stream.as_mut().poll_next(cx) {
+            ActorStreamState::Next => match this.stream.poll_next(cx) {
                 Poll::Ready(Some(item)) => {
                     let (tx, mut rx) = oneshot_channel();
                     let msg = ContextMessage::Instant(InstantMessage::Static(

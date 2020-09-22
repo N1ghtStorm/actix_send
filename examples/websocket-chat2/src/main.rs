@@ -7,7 +7,6 @@ use actix_web::{
     web::{self, Data},
     App, HttpResponse, HttpServer, Responder,
 };
-use futures_util::StreamExt;
 
 use crate::server::SharedChatServer;
 

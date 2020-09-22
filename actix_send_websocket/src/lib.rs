@@ -4,7 +4,7 @@
 //! ```rust,no_run
 //! use actix_web::{get, App, Error, HttpRequest, HttpServer, Responder};
 //! use actix_send_websocket::{Message, WebSocket};
-//! use futures_util::{SinkExt, StreamExt};
+//! use futures_util::SinkExt;
 //!
 //! #[get("/")]
 //! async fn ws(ws: WebSocket) -> impl Responder {
@@ -74,12 +74,11 @@ use actix_web::{
     web::{Bytes, BytesMut, Data},
     FromRequest, HttpRequest, HttpResponse,
 };
-use futures_util::sink::Sink;
 use futures_util::{
     future::{err, ok, Ready},
+    sink::Sink,
     stream::Stream,
 };
-use pin_project::pin_project;
 
 /// config for WebSockets.
 ///
@@ -225,7 +224,6 @@ pub fn split_stream<S>(
 
     (
         DecodeStream {
-            closed: false,
             manager: DecodeStreamManager::new(
                 cfg.heartbeat,
                 cfg.timeout,
@@ -247,14 +245,14 @@ pub fn split_stream<S>(
 }
 
 // decode incoming stream.
-#[pin_project]
-pub struct DecodeStream<S> {
-    closed: bool,
-    manager: DecodeStreamManager,
-    #[pin]
-    stream: S,
-    codec: Codec,
-    buf: BytesMut,
+pin_project_lite::pin_project! {
+    pub struct DecodeStream<S> {
+        manager: DecodeStreamManager,
+        #[pin]
+        stream: S,
+        codec: Codec,
+        buf: BytesMut,
+    }
 }
 
 impl<E, S> Stream for DecodeStream<S>
@@ -282,12 +280,11 @@ where
                 .register(cx.waker());
         }
 
-        match Pin::new(&mut this.stream).poll_next(cx) {
-            Poll::Ready(Some(Ok(chunk))) => {
-                this.buf.extend(&chunk);
+        loop {
+            if !this.buf.is_empty() {
                 match this.codec.decode(this.buf) {
-                    Ok(Some(frame)) => {
-                        let msg = match frame {
+                    Ok(Some(frm)) => {
+                        let msg = match frm {
                             Frame::Text(data) => Message::Text(
                                 std::str::from_utf8(&data)
                                     .map_err(|e| {
@@ -310,19 +307,42 @@ where
                             Frame::Close(reason) => Message::Close(reason),
                             Frame::Continuation(item) => Message::Continuation(item),
                         };
-                        Poll::Ready(Some(Ok(msg)))
+                        return Poll::Ready(Some(Ok(msg)));
                     }
-                    Ok(None) => Poll::Pending,
-                    Err(e) => Poll::Ready(Some(Err(e))),
+                    Ok(None) => (),
+                    Err(e) => return Poll::Ready(Some(Err(e))),
                 }
             }
-            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(ProtocolError::Io(io::Error::new(
-                io::ErrorKind::Other,
-                format!("{}", e),
-            ))))),
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
+
+            match this.stream.poll_next(cx) {
+                Poll::Ready(Some(Ok(chunk))) => {
+                    this.buf.extend(&chunk);
+                    this = self.as_mut().project();
+                }
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(Some(Err(e))) => {
+                    return Poll::Ready(Some(Err(ProtocolError::Io(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("{}", e),
+                    )))));
+                }
+                Poll::Ready(None) => return Poll::Ready(None),
+            }
         }
+    }
+}
+
+impl<E, S> DecodeStream<S>
+where
+    S: Stream<Item = Result<Bytes, E>> + Unpin,
+    E: Debug + Display,
+{
+    pub async fn next(&mut self) -> Option<Result<Message, ProtocolError>> {
+        futures_util::stream::StreamExt::next(self).await
+    }
+
+    pub async fn try_next(&mut self) -> Result<Option<Message>, ProtocolError> {
+        futures_util::stream::TryStreamExt::try_next(self).await
     }
 }
 
