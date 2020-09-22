@@ -337,12 +337,12 @@ where
     S: Stream<Item = Result<Bytes, E>> + Unpin,
     E: Debug + Display,
 {
-    pub async fn next(&mut self) -> Option<Result<Message, ProtocolError>> {
-        futures_util::stream::StreamExt::next(self).await
+    pub fn next(&mut self) -> futures_util::stream::Next<'_, Self> {
+        futures_util::stream::StreamExt::next(self)
     }
 
-    pub async fn try_next(&mut self) -> Result<Option<Message>, ProtocolError> {
-        futures_util::stream::TryStreamExt::try_next(self).await
+    pub fn try_next(&mut self) -> futures_util::stream::TryNext<'_, Self> {
+        futures_util::stream::TryStreamExt::try_next(self)
     }
 }
 
