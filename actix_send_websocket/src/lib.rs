@@ -74,11 +74,13 @@ use actix_web::{
     web::{Bytes, BytesMut, Data},
     FromRequest, HttpRequest, HttpResponse,
 };
+use futures_util::future::LocalBoxFuture;
 use futures_util::{
     future::{err, ok, Ready},
     sink::Sink,
     stream::Stream,
 };
+use std::future::Future;
 
 /// config for WebSockets.
 ///
@@ -266,18 +268,13 @@ where
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.as_mut().project();
 
-        // if heartbeat is disabled then there is no need to check the waker.
+        // resolve when heartbeat future is gone.
         if this.manager.enable_heartbeat {
-            if Rc::strong_count(&this.manager.decode_stream_waker) == 1 {
-                // waked up when heartbeat interval quited so resolve the stream.
+            if this.manager.is_heartbeat_future_closed() {
                 return Poll::Ready(None);
             }
 
-            // otherwise update the waker.
-            this.manager
-                .decode_stream_waker
-                .borrow_mut()
-                .register(cx.waker());
+            this.manager.register_decode_stream_waker(cx);
         }
 
         loop {
@@ -332,6 +329,7 @@ where
     }
 }
 
+#[allow(clippy::should_implement_trait)]
 impl<E, S> DecodeStream<S>
 where
     S: Stream<Item = Result<Bytes, E>> + Unpin,
@@ -372,6 +370,7 @@ impl Stream for EncodeStream {
 #[derive(Clone)]
 struct DecodeStreamManager {
     decode_stream_waker: Rc<RefCell<LocalWaker>>,
+    heartbeat_future_waker: Rc<RefCell<LocalWaker>>,
     enable_heartbeat: bool,
     server_send_heartbeat: bool,
     interval: Option<Duration>,
@@ -384,6 +383,7 @@ struct DecodeStreamManager {
 impl Drop for DecodeStreamManager {
     fn drop(&mut self) {
         self.decode_stream_waker.borrow().wake();
+        self.heartbeat_future_waker.borrow().wake();
     }
 }
 
@@ -397,6 +397,7 @@ impl DecodeStreamManager {
     ) -> Self {
         Self {
             decode_stream_waker: Rc::new(RefCell::new(Default::default())),
+            heartbeat_future_waker: Rc::new(RefCell::new(Default::default())),
             enable_heartbeat: interval.is_some(),
             server_send_heartbeat,
             interval,
@@ -409,33 +410,25 @@ impl DecodeStreamManager {
     #[inline]
     fn start(self) -> Self {
         if let Some(interval) = self.interval {
-            let mut this = self.clone();
-            rt::spawn(async move {
-                loop {
-                    rt::time::delay_for(interval).await;
-
-                    // quit when timed out.
-                    if this.is_timeout() {
-                        break;
-                    }
-                    // quit when decode stream is gone.
-                    if Rc::strong_count(&this.decode_stream_waker) == 1 {
-                        break;
-                    }
-                    // quit when encode stream is gone
-                    if this.tx.is_closed() {
-                        break;
-                    }
-
-                    // send ping to client
-                    if this.server_send_heartbeat && this.tx.ping(b"ping").await.is_err() {
-                        break;
-                    }
-                }
+            let manager = self.clone();
+            rt::spawn(HeartbeatFuture {
+                manager,
+                delay: rt::time::delay_for(interval),
+                ping_message: None,
             });
         }
 
         self
+    }
+
+    fn register_decode_stream_waker(&self, cx: &mut Context<'_>) {
+        self.decode_stream_waker.borrow_mut().register(cx.waker());
+    }
+
+    fn register_heartbeat_future_waker(&self, cx: &mut Context<'_>) {
+        self.heartbeat_future_waker
+            .borrow_mut()
+            .register(cx.waker());
     }
 
     fn is_timeout(&self) -> bool {
@@ -466,6 +459,81 @@ impl DecodeStreamManager {
 
     fn update_heartbeat(&self) {
         *self.heartbeat.borrow_mut() = Instant::now();
+    }
+
+    fn is_heartbeat_future_closed(&self) -> bool {
+        Rc::strong_count(&self.heartbeat_future_waker) == 1
+    }
+
+    fn is_decode_stream_closed(&self) -> bool {
+        Rc::strong_count(&self.decode_stream_waker) == 1
+    }
+
+    fn is_encode_stream_closed(&self) -> bool {
+        self.tx.is_closed()
+    }
+}
+
+struct HeartbeatFuture {
+    manager: DecodeStreamManager,
+    delay: rt::time::Delay,
+    ping_message: Option<LocalBoxFuture<'static, Result<(), Error>>>,
+}
+
+impl Future for HeartbeatFuture {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+
+        // quit when heartbeat timed out/ EncodeStream channel is closed / DecodeStream is closed.
+        if this.manager.is_timeout()
+            || this.manager.is_encode_stream_closed()
+            || this.manager.is_decode_stream_closed()
+        {
+            return Poll::Ready(());
+        }
+
+        this.manager.register_heartbeat_future_waker(cx);
+
+        if let Some(ref mut msg) = this.ping_message {
+            match msg.as_mut().poll(cx) {
+                Poll::Ready(Ok(_)) => {
+                    // # Safety:
+                    // We start HeartbeatFuture only when manager interval is Some.
+                    this.ping_message = None;
+                    this.delay = rt::time::delay_for(this.manager.interval.unwrap());
+                }
+                // reason of send error is not important. exit whenever the EncodeStream channel
+                // goes wrong.
+                Poll::Ready(Err(_)) => return Poll::Ready(()),
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+
+        loop {
+            match Pin::new(&mut this.delay).poll(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(_) if this.manager.server_send_heartbeat => {
+                    // ToDo: we are cloning sender here. Consider using blocking send.
+                    let mut tx = this.manager.tx.clone();
+                    let mut fut = Box::pin(async move { tx.ping(b"ping").await });
+                    match fut.as_mut().poll(cx) {
+                        Poll::Ready(Ok(())) => {
+                            this.delay = rt::time::delay_for(this.manager.interval.unwrap());
+                        }
+                        Poll::Ready(Err(_)) => return Poll::Ready(()),
+                        Poll::Pending => {
+                            this.ping_message = Some(fut);
+                            return Poll::Pending;
+                        }
+                    }
+                }
+                Poll::Ready(_) => {
+                    this.delay = rt::time::delay_for(this.manager.interval.unwrap());
+                }
+            }
+        }
     }
 }
 

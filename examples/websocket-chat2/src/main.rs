@@ -169,8 +169,8 @@ async fn main() -> std::io::Result<()> {
                 WsConfig::new()
                     .heartbeat(HEARTBEAT_INTERVAL)
                     .timeout(CLIENT_TIMEOUT)
-                    // heartbeat is disabled for testing purpose.
-                    .disable_heartbeat(),
+                    // default setting does not enable server side heartbeat to client.
+                    .enable_server_send_heartbeat(),
             )
             // redirect to websocket.html
             .service(web::resource("/").route(web::get().to(|| {
