@@ -6,7 +6,7 @@ edition = "2018"
 
 [features]
 default = ["send"]
-send = ["futures-channel"]
+send = ["tokio/sync"]
 no-send = []
 
 [dependencies]
@@ -14,9 +14,9 @@ actix-codec = "0.3.0"
 actix-http = "2.0.0"
 actix-utils = "2.0.0"
 actix-web = { version = "3.0.2", default-features = false }
-futures-channel = { version = "0.3.5", default-features = false, optional = true }
 futures-util = { version = "0.3.5", default-features = false }
 pin-project-lite = "0.1.7"
+tokio = { version = "0.2.22", default-features = false, optional = true }
 
 [dev-dependencies]
 actix-rt = "1.1.1"

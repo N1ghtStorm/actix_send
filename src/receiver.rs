@@ -38,6 +38,12 @@ pub mod recv {
             self.inner.next().await.ok_or(ActixSendError::Closed)
         }
     }
+
+    impl<M> Clone for Receiver<M> {
+        fn clone(&self) -> Self {
+            panic!("You should not call clone on a mpsc receiver");
+        }
+    }
 }
 
 pub struct Receiver<M> {

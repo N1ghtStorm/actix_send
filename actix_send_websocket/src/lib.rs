@@ -4,7 +4,6 @@
 //! ```rust,no_run
 //! use actix_web::{get, App, Error, HttpRequest, HttpServer, Responder};
 //! use actix_send_websocket::{Message, WebSocket};
-//! use futures_util::SinkExt;
 //!
 //! #[get("/")]
 //! async fn ws(ws: WebSocket) -> impl Responder {
@@ -18,10 +17,10 @@
 //!         while let Some(Ok(msg)) = stream.next().await {
 //!             let result = match msg {
 //!                 // we echo text message and ping message to client.
-//!                 Message::Text(string) => tx.text(string).await,
-//!                 Message::Ping(bytes) => tx.pong(&bytes).await,
+//!                 Message::Text(string) => tx.text(string),
+//!                 Message::Ping(bytes) => tx.pong(&bytes),
 //!                 Message::Close(reason) => {
-//!                     let _ = tx.close(reason).await;
+//!                     let _ = tx.close(reason);
 //!                     // force end the stream when we have a close message.
 //!                     break;
 //!                 }
@@ -61,26 +60,27 @@ use std::io;
 use std::rc::Rc;
 use std::time::Instant;
 
-pub use actix_http::ws::{
-    hash_key, CloseCode, CloseReason, Codec, Frame, HandshakeError, Message, ProtocolError,
-};
-
 use actix_codec::{Decoder, Encoder};
-use actix_utils::task::LocalWaker;
-use actix_web::{
-    dev::{HttpResponseBuilder, Payload},
+pub use actix_http::ws::{
+    CloseCode, CloseReason, Codec, Frame, HandshakeError, Message, ProtocolError,
+};
+use actix_http::{
     error::{Error, ErrorInternalServerError},
     http::{header, Method, StatusCode},
+    Payload, Response, ResponseBuilder,
+};
+use actix_utils::task::LocalWaker;
+use actix_web::{
     rt,
     web::{Bytes, BytesMut, Data},
-    FromRequest, HttpRequest, HttpResponse,
+    FromRequest, HttpRequest,
 };
 use futures_util::{
-    future::{err, ok, Ready},
-    sink::Sink,
+    // ToDo: move to std::future::{ready, Ready} when 1.48 hits stable.
+    future::{ready, Ready},
+    // ToDo: move to std::future::stream whenever it's stable.
     stream::Stream,
 };
-
 /// config for WebSockets.
 ///
 /// # example:
@@ -177,15 +177,11 @@ impl Default for WsConfig {
 }
 
 /// extractor type for websocket.
-pub struct WebSocket(
-    pub DecodeStream<Payload>,
-    pub HttpResponse,
-    pub WebSocketSender,
-);
+pub struct WebSocket(pub DecodeStream<Payload>, pub Response, pub WebSocketSender);
 
 impl WebSocket {
     #[inline]
-    pub fn into_parts(self) -> (DecodeStream<Payload>, HttpResponse, WebSocketSender) {
+    pub fn into_parts(self) -> (DecodeStream<Payload>, Response, WebSocketSender) {
         (self.0, self.1, self.2)
     }
 }
@@ -206,9 +202,9 @@ impl FromRequest for WebSocket {
         match handshake_with_protocols(&req, &protocols) {
             Ok(mut res) => {
                 let (decode, encode, tx) = split_stream(cfg, payload.take());
-                ok(WebSocket(decode, res.streaming(encode), tx))
+                ready(Ok(WebSocket(decode, res.streaming(encode), tx)))
             }
-            Err(e) => err(e.into()),
+            Err(e) => ready(Err(e.into())),
         }
     }
 }
@@ -409,7 +405,7 @@ impl DecodeStreamManager {
     #[inline]
     fn start(self) -> Self {
         if let Some(interval) = self.interval {
-            let mut manager = self.clone();
+            let manager = self.clone();
             rt::spawn(async move {
                 loop {
                     let is_shutdown = HeartbeatFuture::new(interval, &manager).await;
@@ -418,7 +414,7 @@ impl DecodeStreamManager {
                         break;
                     }
 
-                    if manager.server_send_heartbeat && manager.tx.ping(b"ping").await.is_err() {
+                    if manager.server_send_heartbeat && manager.tx.ping(b"ping").is_err() {
                         break;
                     }
                 }
@@ -442,9 +438,7 @@ impl DecodeStreamManager {
         let heartbeat = self.heartbeat.borrow();
         if Instant::now().duration_since(*heartbeat) > self.timeout {
             // send close message to client when hb check is failed.
-            let _ = self
-                .tx
-                .try_send(Message::Close(Some(CloseCode::Normal.into())));
+            let _ = self.tx.send(Message::Close(Some(CloseCode::Normal.into())));
             true
         } else {
             false
@@ -475,10 +469,6 @@ impl DecodeStreamManager {
     fn is_decode_stream_closed(&self) -> bool {
         Rc::strong_count(&self.decode_stream_waker) == 1
     }
-
-    fn is_encode_stream_closed(&self) -> bool {
-        self.tx.is_closed()
-    }
 }
 
 struct HeartbeatFuture<'a> {
@@ -503,10 +493,7 @@ impl Future for HeartbeatFuture<'_> {
 
         // return true when heartbeat timed out/ EncodeStream channel is closed / DecodeStream is
         // closed.
-        if this.manager.is_timeout()
-            || this.manager.is_encode_stream_closed()
-            || this.manager.is_decode_stream_closed()
-        {
+        if this.manager.is_timeout() || this.manager.is_decode_stream_closed() {
             return Poll::Ready(true);
         }
 
@@ -519,65 +506,35 @@ impl Future for HeartbeatFuture<'_> {
 #[derive(Clone)]
 pub struct WebSocketSender(channel::Sender<Message>);
 
-impl Sink<Message> for WebSocketSender {
-    type Error = Error;
-
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Pin::new(&mut self.get_mut().0)
-            .poll_ready(cx)
-            .map_err(ErrorInternalServerError)
-    }
-
-    fn start_send(self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
-        Pin::new(&mut self.get_mut().0)
-            .start_send(item)
-            .map_err(ErrorInternalServerError)
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Pin::new(&mut self.get_mut().0)
-            .poll_flush(cx)
-            .map_err(ErrorInternalServerError)
-    }
-
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Pin::new(&mut self.get_mut().0)
-            .poll_close(cx)
-            .map_err(ErrorInternalServerError)
-    }
-}
-
 impl WebSocketSender {
     /// Send text frame
     #[inline]
-    pub async fn text(&mut self, text: impl Into<String>) -> Result<(), Error> {
-        self.send(Message::Text(text.into())).await
+    pub fn text(&self, text: impl Into<String>) -> Result<(), Error> {
+        self.send(Message::Text(text.into()))
     }
 
     /// Send binary frame
     #[inline]
-    pub async fn binary(&mut self, data: impl Into<Bytes>) -> Result<(), Error> {
-        self.send(Message::Binary(data.into())).await
+    pub fn binary(&self, data: impl Into<Bytes>) -> Result<(), Error> {
+        self.send(Message::Binary(data.into()))
     }
 
     /// Send ping frame
     #[inline]
-    pub async fn ping(&mut self, message: &[u8]) -> Result<(), Error> {
+    pub fn ping(&self, message: &[u8]) -> Result<(), Error> {
         self.send(Message::Ping(Bytes::copy_from_slice(message)))
-            .await
     }
 
     /// Send pong frame
     #[inline]
-    pub async fn pong(&mut self, message: &[u8]) -> Result<(), Error> {
+    pub fn pong(&self, message: &[u8]) -> Result<(), Error> {
         self.send(Message::Pong(Bytes::copy_from_slice(message)))
-            .await
     }
 
     /// Send close frame
     #[inline]
-    pub async fn close(&mut self, reason: Option<CloseReason>) -> Result<(), Error> {
-        self.send(Message::Close(reason)).await
+    pub fn close(&self, reason: Option<CloseReason>) -> Result<(), Error> {
+        self.send(Message::Close(reason))
     }
 }
 
@@ -585,7 +542,7 @@ impl WebSocketSender {
 //
 // This function returns handshake `HttpResponse`, ready to send to peer.
 // It does not perform any IO.
-pub fn handshake(req: &HttpRequest) -> Result<HttpResponseBuilder, HandshakeError> {
+pub fn handshake(req: &HttpRequest) -> Result<ResponseBuilder, HandshakeError> {
     handshake_with_protocols(req, &[])
 }
 
@@ -600,7 +557,7 @@ pub fn handshake(req: &HttpRequest) -> Result<HttpResponseBuilder, HandshakeErro
 pub fn handshake_with_protocols(
     req: &HttpRequest,
     protocols: &[&str],
-) -> Result<HttpResponseBuilder, HandshakeError> {
+) -> Result<ResponseBuilder, HandshakeError> {
     // WebSocket accepts only GET
     if *req.method() != Method::GET {
         return Err(HandshakeError::GetMethodRequired);
@@ -646,7 +603,7 @@ pub fn handshake_with_protocols(
     }
     let key = {
         let key = req.headers().get(header::SEC_WEBSOCKET_KEY).unwrap();
-        hash_key(key.as_ref())
+        actix_http::ws::hash_key(key.as_ref())
     };
 
     // check requested protocols
@@ -661,7 +618,7 @@ pub fn handshake_with_protocols(
                 .find(|req_p| protocols.iter().any(|p| p == req_p))
         });
 
-    let mut response = HttpResponse::build(StatusCode::SWITCHING_PROTOCOLS)
+    let mut response = Response::build(StatusCode::SWITCHING_PROTOCOLS)
         .upgrade("websocket")
         .header(header::TRANSFER_ENCODING, "chunked")
         .header(header::SEC_WEBSOCKET_ACCEPT, key.as_str())
@@ -679,20 +636,16 @@ pub fn handshake_with_protocols(
 mod channel {
     use super::{Error, ErrorInternalServerError, Message};
 
-    use futures_util::SinkExt;
-
-    pub(super) use futures_channel::mpsc::{
-        UnboundedReceiver as Receiver, UnboundedSender as Sender,
-    };
+    pub(super) use tokio::sync::mpsc::{UnboundedReceiver as Receiver, UnboundedSender as Sender};
 
     pub(super) fn channel<T>() -> (Sender<T>, Receiver<T>) {
-        futures_channel::mpsc::unbounded()
+        tokio::sync::mpsc::unbounded_channel()
     }
 
     impl super::WebSocketSender {
         /// send the message asynchronously.
-        pub async fn send(&mut self, message: Message) -> Result<(), Error> {
-            self.0.send(message).await.map_err(ErrorInternalServerError)
+        pub fn send(&self, message: Message) -> Result<(), Error> {
+            self.0.send(message).map_err(ErrorInternalServerError)
         }
 
         /// send the message synchronously. The send would fail only when the receive part is closed.
@@ -701,15 +654,14 @@ mod channel {
         ///
         /// *. It's suggested call `into_inner` and get the message that failed to sent instead  of
         /// importing the error type from said crate.
+        #[deprecated(
+            note = "channel has been moved to use tokio::sync::mpsc so try_send is removed"
+        )]
         pub fn try_send(
             &self,
             message: Message,
-        ) -> Result<(), futures_channel::mpsc::TrySendError<Message>> {
-            self.0.unbounded_send(message)
-        }
-
-        pub fn is_closed(&self) -> bool {
-            self.0.is_closed()
+        ) -> Result<(), tokio::sync::mpsc::error::SendError<Message>> {
+            self.0.send(message)
         }
     }
 }
@@ -727,7 +679,7 @@ mod channel {
 
     impl super::WebSocketSender {
         /// send the message asynchronously.
-        pub async fn send(&mut self, message: Message) -> Result<(), Error> {
+        pub fn send(&mut self, message: Message) -> Result<(), Error> {
             self.0.send(message).map_err(ErrorInternalServerError)
         }
 
@@ -737,16 +689,12 @@ mod channel {
         ///
         /// *. It's suggested call `into_inner` and get the message that failed to sent instead  of
         /// importing the error type from said crate.
+        #[deprecated(note = "please use channel::send instead.")]
         pub fn try_send(
             &self,
             message: Message,
         ) -> Result<(), actix_utils::mpsc::SendError<Message>> {
             self.0.send(message)
-        }
-
-        // placeholder method.
-        pub fn is_closed(&self) -> bool {
-            false
         }
     }
 }

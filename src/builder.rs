@@ -8,6 +8,7 @@ use crate::context::{ActorContext, ContextMessage};
 use crate::receiver::Receiver;
 use crate::sender::Sender;
 use crate::util::channel::unbounded;
+use std::sync::Arc;
 
 pub struct Builder<A>
 where
@@ -20,20 +21,28 @@ where
 // A container for builder function of actor instance.
 // We box the function into a trait object to make it easier to work with for less type signatures.
 pub struct BuilderFnContainer<A> {
-    inner: Box<dyn BuilderFnTrait<A>>,
+    inner: Arc<dyn BuilderFnTrait<A> + Send + Sync>,
+}
+
+impl<A> Clone for BuilderFnContainer<A> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
 }
 
 impl<A> BuilderFnContainer<A> {
     pub(crate) fn new<F, Fut>(f: F) -> Self
     where
-        F: Fn() -> Fut + Send + 'static,
+        F: Fn() -> Fut + Send + Sync + 'static,
         Fut: Future<Output = A> + 'static,
     {
-        Self { inner: Box::new(f) }
+        Self { inner: Arc::new(f) }
     }
 
     async fn build(&self) -> A {
-        self.inner.as_ref().build().await
+        Arc::clone(&self.inner).build().await
     }
 }
 
@@ -44,7 +53,7 @@ pub trait BuilderFnTrait<A> {
 
 impl<A, F, Fut> BuilderFnTrait<A> for F
 where
-    F: Fn() -> Fut,
+    F: Fn() -> Fut + 'static,
     Fut: Future<Output = A>,
 {
     fn build(&self) -> Pin<Box<dyn Future<Output = A> + '_>> {
@@ -131,7 +140,6 @@ where
     }
 
     /// Start actor(s) with the Builder settings.
-    #[cfg(not(any(feature = "actix-runtime-mpsc", feature = "actix-runtime-local")))]
     pub async fn start(self) -> Address<A> {
         let num = self.config.num;
 
@@ -140,61 +148,54 @@ where
         let state = ActorState::new(self.config);
         let mut broadcast_senders = Vec::with_capacity(num);
 
-        for i in 0..num {
-            let actor = self.actor_builder.build().await;
+        match num {
+            1 => {
+                let actor = self.actor_builder.build().await;
 
-            let broadcast_receiver = state.broadcast_receiver(&mut broadcast_senders, num);
+                let broadcast_receiver = state.broadcast_receiver(&mut broadcast_senders, num);
+                ActorContext::new(
+                    0,
+                    tx.downgrade(),
+                    rx,
+                    broadcast_receiver,
+                    actor,
+                    state.clone(),
+                )
+                .spawn_loop();
 
-            ActorContext::new(
-                i,
-                tx.downgrade(),
-                rx.clone(),
-                broadcast_receiver,
-                actor,
-                state.clone(),
-            )
-            .spawn_loop();
+                Address::new(tx, broadcast_senders.into(), state)
+            }
+            _ => {
+                for i in 0..num {
+                    let actor = self.actor_builder.build().await;
+
+                    let broadcast_receiver = state.broadcast_receiver(&mut broadcast_senders, num);
+
+                    ActorContext::new(
+                        i,
+                        tx.downgrade(),
+                        rx.clone(),
+                        broadcast_receiver,
+                        actor,
+                        state.clone(),
+                    )
+                    .spawn_loop();
+                }
+
+                Address::new(tx, broadcast_senders.into(), state)
+            }
         }
-
-        Address::new(tx, broadcast_senders.into(), state)
-    }
-
-    #[cfg(any(feature = "actix-runtime-mpsc", feature = "actix-runtime-local"))]
-    pub async fn start(self) -> Address<A> {
-        let num = self.config.num;
-
-        assert_eq!(
-            num, 1,
-            "It doesn't make sense to construct multiple instances of actor on single thread."
-        );
-
-        let (tx, rx) = unbounded_channel::<ContextMessage<A>>();
-
-        let state = ActorState::new(self.config);
-        let mut broadcast_senders = Vec::with_capacity(num);
-
-        let actor = self.actor_builder.build().await;
-
-        let broadcast_receiver = state.broadcast_receiver(&mut broadcast_senders, num);
-
-        ActorContext::new(
-            0,
-            tx.downgrade(),
-            rx,
-            broadcast_receiver,
-            actor,
-            state.clone(),
-        )
-        .spawn_loop();
-
-        Address::new(tx, broadcast_senders.into(), state)
     }
 
     /// Start actors on the given arbiter slice.
     ///
     /// Actors would try to spawn evenly on the given arbiters.
-    #[cfg(feature = "actix-runtime")]
-    pub async fn start_with_arbiter(self, arbiters: &[actix_rt::Arbiter]) -> Address<A> {
+    #[cfg(any(feature = "actix-runtime", feature = "actix-runtime-mpsc"))]
+    pub async fn start_with_arbiters(
+        self,
+        arbiters: &[actix_rt::Arbiter],
+        index: Option<usize>,
+    ) -> Address<A> {
         let num = self.config.num;
 
         let (tx, rx) = unbounded_channel::<ContextMessage<A>>();
@@ -202,31 +203,66 @@ where
         let state = ActorState::new(self.config);
         let mut broadcast_senders = Vec::with_capacity(num);
 
-        let len = arbiters.len();
+        match num {
+            1 => {
+                let builder = self.actor_builder.clone();
 
-        for i in 0..num {
-            let index = i % len;
+                let index = index.unwrap_or(0);
 
-            let actor = self.actor_builder.build().await;
+                arbiters
+                    .get(index)
+                    .expect("Vec<Arbiters> index overflow")
+                    .exec_fn({
+                        let tx = tx.downgrade();
+                        let state = state.clone();
+                        move || {
+                            actix_rt::Arbiter::spawn(async move {
+                                let actor = builder.build().await;
+                                let ctx = ActorContext::new(0, tx, rx.into(), None, actor, state);
+                                ctx.spawn_loop();
+                            })
+                        }
+                    });
 
-            let broadcast_receiver = state.broadcast_receiver(&mut broadcast_senders, num);
+                Address::new(tx, broadcast_senders.into(), state)
+            }
+            _ => {
+                let len = arbiters.len();
+                for i in 0..num {
+                    let index = i % len;
 
-            let ctx = ActorContext::new(
-                i,
-                tx.downgrade(),
-                rx.clone().into(),
-                broadcast_receiver,
-                actor,
-                state.clone(),
-            );
+                    let builder = self.actor_builder.clone();
 
-            arbiters
-                .get(index)
-                .expect("Vec<Arbiters> index overflow")
-                .exec_fn(|| ctx.spawn_loop());
+                    let broadcast_receiver = state.broadcast_receiver(&mut broadcast_senders, num);
+
+                    arbiters
+                        .get(index)
+                        .expect("Vec<Arbiters> index overflow")
+                        .exec_fn({
+                            let tx = tx.downgrade();
+                            let rx = rx.clone();
+                            let state = state.clone();
+                            move || {
+                                actix_rt::Arbiter::spawn(async move {
+                                    let actor = builder.build().await;
+
+                                    ActorContext::new(
+                                        i,
+                                        tx,
+                                        rx.into(),
+                                        broadcast_receiver,
+                                        actor,
+                                        state,
+                                    )
+                                    .spawn_loop();
+                                })
+                            }
+                        });
+                }
+
+                Address::new(tx, broadcast_senders.into(), state)
+            }
         }
-
-        Address::new(tx, broadcast_senders.into(), state)
     }
 
     fn check_num(num: usize, target: usize) {

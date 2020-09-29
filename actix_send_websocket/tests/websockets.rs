@@ -5,15 +5,15 @@ use actix_web::{get, test, web::Bytes, App, Responder};
 use futures_util::{SinkExt, StreamExt};
 
 #[get("/")]
-async fn handler(WebSocket(mut stream, res, mut tx): WebSocket) -> impl Responder {
+async fn handler(WebSocket(mut stream, res, tx): WebSocket) -> impl Responder {
     actix_web::rt::spawn(async move {
         while let Some(Ok(msg)) = stream.next().await {
             let result = match msg {
-                Message::Text(str) => tx.text(str).await,
-                Message::Binary(bytes) => tx.binary(bytes).await,
-                Message::Ping(bytes) => tx.pong(&bytes).await,
+                Message::Text(str) => tx.text(str),
+                Message::Binary(bytes) => tx.binary(bytes),
+                Message::Ping(bytes) => tx.pong(&bytes),
                 Message::Close(reason) => {
-                    let _ = tx.close(reason).await;
+                    let _ = tx.close(reason);
                     break;
                 }
                 _ => Ok(()),
