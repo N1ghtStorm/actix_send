@@ -45,6 +45,13 @@
 //!         .await
 //! }
 //! ```
+//!
+//! # Features
+//! | Feature | Description | Extra dependencies | Default |
+//! | ------- | ----------- | ------------------ | ------- |
+//! | `default` | The same as `send` feature | [tokio](https://crates.io/crates/tokio) with `sync` feature enabled | yes |
+//! | `send` | Enable websocket sink with `Send` marker | [tokio](https://crates.io/crates/tokio) with `sync` feature enabled | yes |
+//! | `no-send` | weboscoekt on local thread only | none | no |
 
 #![forbid(unsafe_code)]
 #![forbid(unused_variables)]
@@ -437,7 +444,6 @@ impl DecodeStreamManager {
     fn is_timeout(&self) -> bool {
         let heartbeat = self.heartbeat.borrow();
         if Instant::now().duration_since(*heartbeat) > self.timeout {
-            // send close message to client when hb check is failed.
             let _ = self.tx.send(Message::Close(Some(CloseCode::Normal.into())));
             true
         } else {
@@ -451,7 +457,6 @@ impl DecodeStreamManager {
         }
     }
 
-    // Determine if we update heartbeat when a Pong message is received.
     fn update_heartbeat_pong(&self) {
         if self.server_send_heartbeat {
             self.update_heartbeat();
@@ -491,8 +496,6 @@ impl Future for HeartbeatFuture<'_> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
 
-        // return true when heartbeat timed out/ EncodeStream channel is closed / DecodeStream is
-        // closed.
         if this.manager.is_timeout() || this.manager.is_decode_stream_closed() {
             return Poll::Ready(true);
         }
@@ -538,22 +541,22 @@ impl WebSocketSender {
     }
 }
 
-// Prepare `WebSocket` handshake response.
-//
-// This function returns handshake `HttpResponse`, ready to send to peer.
-// It does not perform any IO.
+/// Prepare `WebSocket` handshake response.
+///
+/// This function returns handshake `HttpResponse`, ready to send to peer.
+/// It does not perform any IO.
 pub fn handshake(req: &HttpRequest) -> Result<ResponseBuilder, HandshakeError> {
     handshake_with_protocols(req, &[])
 }
 
-// Prepare `WebSocket` handshake response.
-//
-// This function returns handshake `HttpResponse`, ready to send to peer.
-// It does not perform any IO.
-//
-// `protocols` is a sequence of known protocols. On successful handshake,
-// the returned response headers contain the first protocol in this list
-// which the server also knows.
+/// Prepare `WebSocket` handshake response.
+///
+/// This function returns handshake `HttpResponse`, ready to send to peer.
+/// It does not perform any IO.
+///
+/// `protocols` is a sequence of known protocols. On successful handshake,
+/// the returned response headers contain the first protocol in this list
+/// which the server also knows.
 pub fn handshake_with_protocols(
     req: &HttpRequest,
     protocols: &[&str],
@@ -648,12 +651,6 @@ mod channel {
             self.0.send(message).map_err(ErrorInternalServerError)
         }
 
-        /// send the message synchronously. The send would fail only when the receive part is closed.
-        ///
-        /// The returned Error type is `futures_channel::mpsc::TrySendError`.
-        ///
-        /// *. It's suggested call `into_inner` and get the message that failed to sent instead  of
-        /// importing the error type from said crate.
         #[deprecated(
             note = "channel has been moved to use tokio::sync::mpsc so try_send is removed"
         )]
@@ -683,12 +680,6 @@ mod channel {
             self.0.send(message).map_err(ErrorInternalServerError)
         }
 
-        /// send the message synchronously. The send would fail only when the receive part is closed.
-        ///
-        /// The returned Error type is `actix_utils::mpsc::SendError`.
-        ///
-        /// *. It's suggested call `into_inner` and get the message that failed to sent instead  of
-        /// importing the error type from said crate.
         #[deprecated(note = "please use channel::send instead.")]
         pub fn try_send(
             &self,
