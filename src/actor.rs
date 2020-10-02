@@ -27,7 +27,7 @@ macro_rules! actor {
             /// define a new builder for an new set of actor(s) with the async closure.
             fn builder<F, Fut>(f: F) -> Builder<Self>
             where
-                F: Fn() -> Fut + Send + 'static,
+                F: Fn() -> Fut + Send + Sync + 'static,
                 Fut: Future<Output = Self> + 'static,
             {
                 Builder {
@@ -74,7 +74,7 @@ where
     fn builder<F, Fut>(f: F) -> Builder<Self>
     where
         F: Fn() -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Self> + Send + 'static,
+        Fut: Future<Output = Self> + 'static,
     {
         Builder {
             actor_builder: BuilderFnContainer::new(f),

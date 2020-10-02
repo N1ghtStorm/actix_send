@@ -57,7 +57,7 @@ fn main() {
 
                 let arbiters = (0..num).map(|_| Arbiter::new()).collect::<Vec<Arbiter>>();
 
-                let address = builder.num(num).start_with_arbiter(&arbiters).await;
+                let address = builder.num(num).start_with_arbiters(&arbiters, None).await;
 
                 if dynamic {
                     println!("starting benchmark actix_send with dynamic dispatch");

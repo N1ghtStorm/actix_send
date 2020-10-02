@@ -11,11 +11,7 @@ name = "actix_send"
 path = "src/lib.rs"
 
 [workspace]
-members = [
-    "actix-send-macros",
-    "actix_send_websocket",
-    "examples/websocket-chat2"
-]
+members = ["actix-send-macros"]
 
 [[example]]
 name = "basic"

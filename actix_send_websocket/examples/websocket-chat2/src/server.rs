@@ -43,7 +43,7 @@ impl ChatServer {
                 .filter_map(|id| self.sessions.get(id).map(|addr| (addr, id)))
                 .filter_map(|(addr, id)| {
                     // collect try_send error session ids.
-                    addr.try_send(Message::Text(message.to_owned()))
+                    addr.send(Message::Text(message.to_owned()))
                         .err()
                         .map(|_| *id)
                 })

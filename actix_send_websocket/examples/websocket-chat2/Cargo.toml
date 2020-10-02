@@ -10,6 +10,6 @@ path = "src/main.rs"
 
 [dependencies]
 actix-files = "0.3.0"
-actix_send_websocket = { git = "https://github.com/fakeshadow/actix_send.git" }
-actix-web = "3.0.2"
+actix_send_websocket = "0.1.0"
+actix-web = "3.1.0"
 rand = "0.7.3"

@@ -129,8 +129,8 @@
 //! | `tokio-runtime` | Enable support for the `tokio` crate. | [async-channel](https://crates.io/crates/async-channel)<br>[tokio](https://crates.io/crates/tokio) | yes |
 //! | `async-std-runtime` | Enable support for the `async-std` crate. | [async-channel](https://crates.io/crates/async-channel)<br>[async-std](https://crates.io/crates/async-std)<br>[tokio](https://crates.io/crates/tokio) with `sync` feature | no |
 //! | `actix-runtime` | Enable support for the `actix-rt` crate. | [actix-rt](https://crates.io/crates/actix-rt)<br>[async-channel](https://crates.io/crates/async-channel)<br>[tokio](https://crates.io/crates/tokio) with `sync` feature | no |
-//! | `actix-runtime-mpsc` | Enable support for mpsc actor for `actix-rt`. | [actix-rt](https://crates.io/crates/actix-rt)<br>[tokio](https://crates.io/crates/tokio) with `sync` feature | no |
-//! | `actix-runtime-local` | Enable support for strict thread local actor for `actix-rt`. | [actix-rt](https://crates.io/crates/actix-rt)<br>[actix-utils](https://crates.io/crates/actix-utils) | no |
+//! | `actix-runtime-mpsc` | Enable support for mpsc actor for `actix-rt`. actor runs on single thread with a thread safe sender for message. | [actix-rt](https://crates.io/crates/actix-rt)<br>[tokio](https://crates.io/crates/tokio) with `sync` feature | no |
+//! | `actix-runtime-local` | Enable support for strict thread local actor for `actix-rt`. actor runs on single thread only including the sender with the least overhead of passing messages. | [actix-rt](https://crates.io/crates/actix-rt)<br>[actix-utils](https://crates.io/crates/actix-utils) | no |
 
 #![forbid(unsafe_code)]
 #![deny(unused_variables)]
