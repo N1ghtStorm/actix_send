@@ -2,6 +2,8 @@
 name = "actix_send_websocket"
 version = "0.1.0"
 authors = ["fakeshadow <24548779@qq.com>"]
+keywords = ["actix-web", "websocket"]
+license = "MIT"
 description = "helper crate for managing websocket on actix-web framework"
 edition = "2018"
 exclude = ["examples/*", "tests/*"]

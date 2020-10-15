@@ -42,7 +42,7 @@ async fn main() {
     }
 
     // We wait a little bit before we drop the address so that all delayed requests are registered.
-    let _ = tokio::time::delay_for(Duration::from_secs(1)).await;
+    let _ = tokio::time::sleep(Duration::from_secs(1)).await;
 
     std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
 
@@ -56,7 +56,7 @@ async fn main() {
 
     drop(address1);
     drop(address2);
-    let _ = tokio::time::delay_for(Duration::from_secs(1)).await;
+    let _ = tokio::time::sleep(Duration::from_secs(1)).await;
 }
 
 #[actor_mod]

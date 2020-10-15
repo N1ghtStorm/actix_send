@@ -28,7 +28,7 @@ impl MyActor {
         // Just like other methods. The actual name of method is not important at all.
         // It's the #[on_stop] that matters.
 
-        let _ = tokio::time::delay_for(Duration::from_millis(1)).await;
+        let _ = tokio::time::sleep(Duration::from_millis(1)).await;
         println!(
             "this happens before actor is closing.\r\nCurrent actor state is {}",
             self.0
@@ -50,7 +50,7 @@ async fn main() {
 
     drop(address);
 
-    tokio::time::delay_for(Duration::from_secs(1)).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
 
     println!("example finished successfully");
 }

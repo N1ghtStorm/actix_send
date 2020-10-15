@@ -59,8 +59,8 @@ macro_rules! runtime_impl {
 )))]
 runtime_impl!(
     tokio::spawn,
-    tokio::time::delay_for,
-    tokio::time::Delay,
+    tokio::time::sleep,
+    tokio::time::Sleep,
     tokio::time::interval,
     tokio::time::Interval,
     tokio::time::timeout,

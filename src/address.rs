@@ -185,6 +185,9 @@ where
     ///
     /// *. `Some` variant of the original stream's Item must be one of actor's message types.
     /// (Or with trait Into<Actor::Message> impl)
+    #[deprecated(
+        note = "send_skip_stream will be removed in future. please consider use futures_util::stream::stream::skip_while instead"
+    )]
     #[must_use = "futures do nothing unless you `.await` or poll them"]
     pub fn send_skip_stream<S, I, M>(&self, stream: S) -> ActorSkipStream<A, S, I, M>
     where
