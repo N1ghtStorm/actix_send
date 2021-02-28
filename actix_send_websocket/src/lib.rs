@@ -261,10 +261,13 @@ impl<S> Deref for WebSocketStream<S> {
 }
 
 impl<S> WebSocketStream<S> {
+    /// Get a reference of the sender.
+    /// `WebSocketSender` can be used to push response message to client.
     pub fn sender(&self) -> &WebSocketSender {
         &self.tx
     }
 
+    /// Owned version of `WebSocketStream::sender` API.
     pub fn sender_owned(&self) -> WebSocketSender {
         self.tx.clone()
     }

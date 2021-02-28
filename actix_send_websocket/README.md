@@ -1,4 +1,4 @@
-### `actix_send_websocket` is a helper crate for managing websocket for [actix-web-v3](https://crates.io/crates/actix-web)
+### `actix_send_websocket` is a helper crate for managing websocket for [actix-web-v4](https://crates.io/crates/actix-web)
 
 #### Example:
 ```rust
@@ -10,17 +10,17 @@ async fn ws(ws: WebSocket) -> impl Responder {
     // stream is the async iterator of incoming client websocket messages.
     // res is the response we return to client.
     // tx is a sender to push new websocket message to client response.
-    let (mut stream, res, mut tx) = ws.into_parts();
+    let (mut stream, res) = ws.into_parts();
 
     // spawn the stream handling so we don't block the response to client.
     actix_web::rt::spawn(async move {
         while let Some(Ok(msg)) = stream.next().await {
             let result = match msg {
                 // we echo text message and ping message to client.
-                Message::Text(string) => tx.text(string),
-                Message::Ping(bytes) => tx.pong(&bytes),
+                Message::Text(string) => stream.text(string),
+                Message::Ping(bytes) => stream.pong(&bytes),
                 Message::Close(reason) => {
-                    let _ = tx.close(reason);
+                    let _ = stream.close(reason);
                     // force end the stream when we have a close message.
                     break;
                 }
