@@ -10,17 +10,17 @@
 //!     // stream is the async iterator of incoming client websocket messages.
 //!     // res is the response we return to client.
 //!     // tx is a sender to push new websocket message to client response.
-//!     let (mut stream, res, mut tx) = ws.into_parts();
+//!     let (mut stream, res) = ws.into_parts();
 //!
 //!     // spawn the stream handling so we don't block the response to client.
 //!     actix_web::rt::spawn(async move {
 //!         while let Some(Ok(msg)) = stream.next().await {
 //!             let result = match msg {
 //!                 // we echo text message and ping message to client.
-//!                 Message::Text(string) => tx.text(string),
-//!                 Message::Ping(bytes) => tx.pong(&bytes),
+//!                 Message::Text(string) => stream.text(string),
+//!                 Message::Ping(bytes) => stream.pong(&bytes),
 //!                 Message::Close(reason) => {
-//!                     let _ = tx.close(reason);
+//!                     let _ = stream.close(reason);
 //!                     // force end the stream when we have a close message.
 //!                     break;
 //!                 }
@@ -45,20 +45,14 @@
 //!         .await
 //! }
 //! ```
-//!
-//! # Features
-//! | Feature | Description | Extra dependencies | Default |
-//! | ------- | ----------- | ------------------ | ------- |
-//! | `default` | The same as `send` feature | [tokio](https://crates.io/crates/tokio) with `sync` feature enabled | yes |
-//! | `send` | Enable websocket sink with `Send` marker | [tokio](https://crates.io/crates/tokio) with `sync` feature enabled | yes |
-//! | `no-send` | weboscoekt on local thread only | none | no |
 
 #![forbid(unsafe_code)]
 #![forbid(unused_variables)]
 
-use core::cell::RefCell;
+use core::cell::Cell;
 use core::fmt::{Debug, Display};
 use core::future::Future;
+use core::ops::Deref;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use core::time::Duration;
@@ -82,12 +76,15 @@ use actix_web::{
     web::{Bytes, BytesMut, Data},
     FromRequest, HttpRequest,
 };
+use bytestring::ByteString;
 use futures_util::{
     // ToDo: move to std::future::{ready, Ready} when 1.48 hits stable.
     future::{ready, Ready},
+    ready,
     // ToDo: move to std::future::stream whenever it's stable.
     stream::Stream,
 };
+
 /// config for WebSockets.
 ///
 /// # example:
@@ -163,7 +160,7 @@ impl WsConfig {
     fn from_req(req: &HttpRequest) -> &Self {
         req.app_data::<Self>()
             .or_else(|| req.app_data::<Data<Self>>().map(|d| d.as_ref()))
-            .unwrap_or_else(|| &DEFAULT_CONFIG)
+            .unwrap_or(&DEFAULT_CONFIG)
     }
 }
 
@@ -184,19 +181,19 @@ impl Default for WsConfig {
 }
 
 /// extractor type for websocket.
-pub struct WebSocket(pub DecodeStream<Payload>, pub Response, pub WebSocketSender);
+pub struct WebSocket(pub WebSocketStream<Payload>, pub Response);
 
 impl WebSocket {
     #[inline]
-    pub fn into_parts(self) -> (DecodeStream<Payload>, Response, WebSocketSender) {
-        (self.0, self.1, self.2)
+    pub fn into_parts(self) -> (WebSocketStream<Payload>, Response) {
+        (self.0, self.1)
     }
 }
 
 impl FromRequest for WebSocket {
+    type Config = WsConfig;
     type Error = Error;
     type Future = Ready<Result<Self, Self::Error>>;
-    type Config = WsConfig;
 
     fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
         let cfg = Self::Config::from_req(req);
@@ -208,8 +205,8 @@ impl FromRequest for WebSocket {
 
         match handshake_with_protocols(&req, &protocols) {
             Ok(mut res) => {
-                let (decode, encode, tx) = split_stream(cfg, payload.take());
-                ready(Ok(WebSocket(decode, res.streaming(encode), tx)))
+                let (stream, encode) = split_stream(cfg, payload.take());
+                ready(Ok(WebSocket(stream, res.streaming(encode))))
             }
             Err(e) => ready(Err(e.into())),
         }
@@ -217,40 +214,78 @@ impl FromRequest for WebSocket {
 }
 
 /// split stream into decode/encode streams and a sender that can send item to encode stream.
-pub fn split_stream<S>(
-    cfg: &WsConfig,
-    stream: S,
-) -> (DecodeStream<S>, EncodeStream, WebSocketSender) {
+pub fn split_stream<S>(cfg: &WsConfig, stream: S) -> (WebSocketStream<S>, EncodeStream) {
     let (tx, rx) = channel::channel();
     let tx = WebSocketSender(tx);
 
     let codec = cfg.codec.unwrap_or_else(Codec::new);
 
     (
-        DecodeStream {
-            manager: DecodeStreamManager::new(
-                cfg.heartbeat,
-                cfg.timeout,
-                cfg.server_send_heartbeat,
-                tx.clone(),
-            )
-            .start(),
-            stream,
-            codec,
-            buf: Default::default(),
+        WebSocketStream {
+            decode: DecodeStream {
+                manager: DecodeStreamManager::new(
+                    cfg.heartbeat,
+                    cfg.timeout,
+                    cfg.server_send_heartbeat,
+                    tx.clone(),
+                )
+                .start(),
+                stream,
+                codec,
+                buf: Default::default(),
+            },
+            tx,
         },
         EncodeStream {
             rx,
             codec,
             buf: Default::default(),
         },
-        tx,
     )
+}
+
+pin_project_lite::pin_project! {
+    pub struct WebSocketStream<S> {
+        #[pin]
+        decode: DecodeStream<S>,
+        tx: WebSocketSender,
+    }
+}
+
+impl<S> Deref for WebSocketStream<S> {
+    type Target = WebSocketSender;
+
+    fn deref(&self) -> &Self::Target {
+        &self.tx
+    }
+}
+
+impl<S> WebSocketStream<S> {
+    pub fn sender(&self) -> &WebSocketSender {
+        &self.tx
+    }
+
+    pub fn sender_owned(&self) -> WebSocketSender {
+        self.tx.clone()
+    }
+}
+
+impl<E, S> Stream for WebSocketStream<S>
+where
+    S: Stream<Item = Result<Bytes, E>>,
+    E: Debug + Display,
+{
+    // Decode error is packed with websocket Message and return as a Result.
+    type Item = Result<Message, ProtocolError>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.project().decode.poll_next(cx)
+    }
 }
 
 // decode incoming stream.
 pin_project_lite::pin_project! {
-    pub struct DecodeStream<S> {
+     struct DecodeStream<S> {
         manager: DecodeStreamManager,
         #[pin]
         stream: S,
@@ -292,7 +327,7 @@ where
                                             format!("{}", e),
                                         ))
                                     })?
-                                    .to_string(),
+                                    .into(),
                             ),
                             Frame::Binary(data) => Message::Binary(data),
                             Frame::Ping(s) => {
@@ -313,26 +348,25 @@ where
                 }
             }
 
-            match this.stream.poll_next(cx) {
-                Poll::Ready(Some(Ok(chunk))) => {
+            match ready!(this.stream.poll_next(cx)) {
+                Some(Ok(chunk)) => {
                     this.buf.extend(&chunk);
                     this = self.as_mut().project();
                 }
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(Some(Err(e))) => {
+                Some(Err(e)) => {
                     return Poll::Ready(Some(Err(ProtocolError::Io(io::Error::new(
                         io::ErrorKind::Other,
                         format!("{}", e),
                     )))));
                 }
-                Poll::Ready(None) => return Poll::Ready(None),
+                None => return Poll::Ready(None),
             }
         }
     }
 }
 
 #[allow(clippy::should_implement_trait)]
-impl<E, S> DecodeStream<S>
+impl<E, S> WebSocketStream<S>
 where
     S: Stream<Item = Result<Bytes, E>> + Unpin,
     E: Debug + Display,
@@ -358,34 +392,33 @@ impl Stream for EncodeStream {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
 
-        match Pin::new(&mut this.rx).poll_next(cx) {
-            Poll::Ready(Some(msg)) => match this.codec.encode(msg, &mut this.buf) {
+        match ready!(Pin::new(&mut this.rx).poll_recv(cx)) {
+            Some(msg) => match this.codec.encode(msg, &mut this.buf) {
                 Ok(()) => Poll::Ready(Some(Ok(this.buf.split().freeze()))),
                 Err(e) => Poll::Ready(Some(Err(e.into()))),
             },
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
+            None => Poll::Ready(None),
         }
     }
 }
 
 #[derive(Clone)]
 struct DecodeStreamManager {
-    decode_stream_waker: Rc<RefCell<LocalWaker>>,
-    heartbeat_future_waker: Rc<RefCell<LocalWaker>>,
+    decode_stream_waker: Rc<LocalWaker>,
+    heartbeat_future_waker: Rc<LocalWaker>,
     enable_heartbeat: bool,
     server_send_heartbeat: bool,
     interval: Option<Duration>,
     timeout: Duration,
-    heartbeat: Rc<RefCell<Instant>>,
+    heartbeat: Rc<Cell<Instant>>,
     tx: WebSocketSender,
 }
 
 // try wake up decode stream and heartbeat future when dropping manager.
 impl Drop for DecodeStreamManager {
     fn drop(&mut self) {
-        self.decode_stream_waker.borrow().wake();
-        self.heartbeat_future_waker.borrow().wake();
+        self.decode_stream_waker.wake();
+        self.heartbeat_future_waker.wake();
     }
 }
 
@@ -398,13 +431,13 @@ impl DecodeStreamManager {
         tx: WebSocketSender,
     ) -> Self {
         Self {
-            decode_stream_waker: Rc::new(RefCell::new(Default::default())),
-            heartbeat_future_waker: Rc::new(RefCell::new(Default::default())),
+            decode_stream_waker: Rc::new(Default::default()),
+            heartbeat_future_waker: Rc::new(Default::default()),
             enable_heartbeat: interval.is_some(),
             server_send_heartbeat,
             interval,
             timeout,
-            heartbeat: Rc::new(RefCell::new(Instant::now())),
+            heartbeat: Rc::new(Cell::new(Instant::now())),
             tx,
         }
     }
@@ -432,18 +465,16 @@ impl DecodeStreamManager {
     }
 
     fn register_decode_stream_waker(&self, cx: &mut Context<'_>) {
-        self.decode_stream_waker.borrow_mut().register(cx.waker());
+        self.decode_stream_waker.register(cx.waker());
     }
 
     fn register_heartbeat_future_waker(&self, cx: &mut Context<'_>) {
-        self.heartbeat_future_waker
-            .borrow_mut()
-            .register(cx.waker());
+        self.heartbeat_future_waker.register(cx.waker());
     }
 
     fn is_timeout(&self) -> bool {
-        let heartbeat = self.heartbeat.borrow();
-        if Instant::now().duration_since(*heartbeat) > self.timeout {
+        let heartbeat = self.heartbeat.get();
+        if Instant::now().duration_since(heartbeat) > self.timeout {
             let _ = self.tx.send(Message::Close(Some(CloseCode::Normal.into())));
             true
         } else {
@@ -464,7 +495,7 @@ impl DecodeStreamManager {
     }
 
     fn update_heartbeat(&self) {
-        *self.heartbeat.borrow_mut() = Instant::now();
+        self.heartbeat.set(Instant::now());
     }
 
     fn is_heartbeat_future_closed(&self) -> bool {
@@ -476,16 +507,19 @@ impl DecodeStreamManager {
     }
 }
 
-struct HeartbeatFuture<'a> {
-    manager: &'a DecodeStreamManager,
-    delay: rt::time::Delay,
+pin_project_lite::pin_project! {
+    struct HeartbeatFuture<'a> {
+        manager: &'a DecodeStreamManager,
+        #[pin]
+        delay: rt::time::Sleep,
+    }
 }
 
 impl<'a> HeartbeatFuture<'a> {
     fn new(dur: Duration, manager: &'a DecodeStreamManager) -> Self {
         Self {
             manager,
-            delay: rt::time::delay_for(dur),
+            delay: rt::time::sleep(dur),
         }
     }
 }
@@ -494,7 +528,7 @@ impl Future for HeartbeatFuture<'_> {
     type Output = bool;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
+        let this = self.project();
 
         if this.manager.is_timeout() || this.manager.is_decode_stream_closed() {
             return Poll::Ready(true);
@@ -502,7 +536,7 @@ impl Future for HeartbeatFuture<'_> {
 
         this.manager.register_heartbeat_future_waker(cx);
 
-        Pin::new(&mut this.delay).poll(cx).map(|_| false)
+        this.delay.poll(cx).map(|_| false)
     }
 }
 
@@ -512,7 +546,7 @@ pub struct WebSocketSender(channel::Sender<Message>);
 impl WebSocketSender {
     /// Send text frame
     #[inline]
-    pub fn text(&self, text: impl Into<String>) -> Result<(), Error> {
+    pub fn text(&self, text: impl Into<ByteString>) -> Result<(), Error> {
         self.send(Message::Text(text.into()))
     }
 
@@ -623,19 +657,17 @@ pub fn handshake_with_protocols(
 
     let mut response = Response::build(StatusCode::SWITCHING_PROTOCOLS)
         .upgrade("websocket")
-        .header(header::TRANSFER_ENCODING, "chunked")
-        .header(header::SEC_WEBSOCKET_ACCEPT, key.as_str())
+        .insert_header((header::TRANSFER_ENCODING, "chunked"))
+        .insert_header((header::SEC_WEBSOCKET_ACCEPT, key.as_str()))
         .take();
 
     if let Some(protocol) = protocol {
-        response.header(header::SEC_WEBSOCKET_PROTOCOL, protocol);
+        response.insert_header((header::SEC_WEBSOCKET_PROTOCOL, protocol));
     }
 
     Ok(response)
 }
 
-#[cfg(feature = "send")]
-#[cfg(not(feature = "no-send"))]
 mod channel {
     use super::{Error, ErrorInternalServerError, Message};
 
@@ -658,33 +690,6 @@ mod channel {
             &self,
             message: Message,
         ) -> Result<(), tokio::sync::mpsc::error::SendError<Message>> {
-            self.0.send(message)
-        }
-    }
-}
-
-#[cfg(feature = "no-send")]
-#[cfg(not(feature = "send"))]
-mod channel {
-    use super::{Error, ErrorInternalServerError, Message};
-
-    pub(super) use actix_utils::mpsc::{Receiver, Sender};
-
-    pub(super) fn channel<T>() -> (Sender<T>, Receiver<T>) {
-        actix_utils::mpsc::channel()
-    }
-
-    impl super::WebSocketSender {
-        /// send the message asynchronously.
-        pub fn send(&mut self, message: Message) -> Result<(), Error> {
-            self.0.send(message).map_err(ErrorInternalServerError)
-        }
-
-        #[deprecated(note = "please use channel::send instead.")]
-        pub fn try_send(
-            &self,
-            message: Message,
-        ) -> Result<(), actix_utils::mpsc::SendError<Message>> {
             self.0.send(message)
         }
     }
@@ -713,7 +718,7 @@ mod tests {
         );
 
         let req = TestRequest::default()
-            .header(header::UPGRADE, header::HeaderValue::from_static("test"))
+            .insert_header((header::UPGRADE, header::HeaderValue::from_static("test")))
             .to_http_request();
         assert_eq!(
             HandshakeError::NoWebsocketUpgrade,
@@ -721,10 +726,10 @@ mod tests {
         );
 
         let req = TestRequest::default()
-            .header(
+            .insert_header((
                 header::UPGRADE,
                 header::HeaderValue::from_static("websocket"),
-            )
+            ))
             .to_http_request();
         assert_eq!(
             HandshakeError::NoConnectionUpgrade,
@@ -732,14 +737,14 @@ mod tests {
         );
 
         let req = TestRequest::default()
-            .header(
+            .insert_header((
                 header::UPGRADE,
                 header::HeaderValue::from_static("websocket"),
-            )
-            .header(
+            ))
+            .insert_header((
                 header::CONNECTION,
                 header::HeaderValue::from_static("upgrade"),
-            )
+            ))
             .to_http_request();
         assert_eq!(
             HandshakeError::NoVersionHeader,
@@ -747,18 +752,18 @@ mod tests {
         );
 
         let req = TestRequest::default()
-            .header(
+            .insert_header((
                 header::UPGRADE,
                 header::HeaderValue::from_static("websocket"),
-            )
-            .header(
+            ))
+            .insert_header((
                 header::CONNECTION,
                 header::HeaderValue::from_static("upgrade"),
-            )
-            .header(
+            ))
+            .insert_header((
                 header::SEC_WEBSOCKET_VERSION,
                 header::HeaderValue::from_static("5"),
-            )
+            ))
             .to_http_request();
         assert_eq!(
             HandshakeError::UnsupportedVersion,
@@ -766,18 +771,18 @@ mod tests {
         );
 
         let req = TestRequest::default()
-            .header(
+            .insert_header((
                 header::UPGRADE,
                 header::HeaderValue::from_static("websocket"),
-            )
-            .header(
+            ))
+            .insert_header((
                 header::CONNECTION,
                 header::HeaderValue::from_static("upgrade"),
-            )
-            .header(
+            ))
+            .insert_header((
                 header::SEC_WEBSOCKET_VERSION,
                 header::HeaderValue::from_static("13"),
-            )
+            ))
             .to_http_request();
         assert_eq!(
             HandshakeError::BadWebsocketKey,
@@ -785,22 +790,22 @@ mod tests {
         );
 
         let req = TestRequest::default()
-            .header(
+            .insert_header((
                 header::UPGRADE,
                 header::HeaderValue::from_static("websocket"),
-            )
-            .header(
+            ))
+            .insert_header((
                 header::CONNECTION,
                 header::HeaderValue::from_static("upgrade"),
-            )
-            .header(
+            ))
+            .insert_header((
                 header::SEC_WEBSOCKET_VERSION,
                 header::HeaderValue::from_static("13"),
-            )
-            .header(
+            ))
+            .insert_header((
                 header::SEC_WEBSOCKET_KEY,
                 header::HeaderValue::from_static("13"),
-            )
+            ))
             .to_http_request();
 
         assert_eq!(
@@ -809,26 +814,26 @@ mod tests {
         );
 
         let req = TestRequest::default()
-            .header(
+            .insert_header((
                 header::UPGRADE,
                 header::HeaderValue::from_static("websocket"),
-            )
-            .header(
+            ))
+            .insert_header((
                 header::CONNECTION,
                 header::HeaderValue::from_static("upgrade"),
-            )
-            .header(
+            ))
+            .insert_header((
                 header::SEC_WEBSOCKET_VERSION,
                 header::HeaderValue::from_static("13"),
-            )
-            .header(
+            ))
+            .insert_header((
                 header::SEC_WEBSOCKET_KEY,
                 header::HeaderValue::from_static("13"),
-            )
-            .header(
+            ))
+            .insert_header((
                 header::SEC_WEBSOCKET_PROTOCOL,
                 header::HeaderValue::from_static("graphql"),
-            )
+            ))
             .to_http_request();
 
         let protocols = ["graphql"];
@@ -850,26 +855,26 @@ mod tests {
         );
 
         let req = TestRequest::default()
-            .header(
+            .insert_header((
                 header::UPGRADE,
                 header::HeaderValue::from_static("websocket"),
-            )
-            .header(
+            ))
+            .insert_header((
                 header::CONNECTION,
                 header::HeaderValue::from_static("upgrade"),
-            )
-            .header(
+            ))
+            .insert_header((
                 header::SEC_WEBSOCKET_VERSION,
                 header::HeaderValue::from_static("13"),
-            )
-            .header(
+            ))
+            .insert_header((
                 header::SEC_WEBSOCKET_KEY,
                 header::HeaderValue::from_static("13"),
-            )
-            .header(
+            ))
+            .insert_header((
                 header::SEC_WEBSOCKET_PROTOCOL,
                 header::HeaderValue::from_static("p1, p2, p3"),
-            )
+            ))
             .to_http_request();
 
         let protocols = vec!["p3", "p2"];
@@ -891,26 +896,26 @@ mod tests {
         );
 
         let req = TestRequest::default()
-            .header(
+            .insert_header((
                 header::UPGRADE,
                 header::HeaderValue::from_static("websocket"),
-            )
-            .header(
+            ))
+            .insert_header((
                 header::CONNECTION,
                 header::HeaderValue::from_static("upgrade"),
-            )
-            .header(
+            ))
+            .insert_header((
                 header::SEC_WEBSOCKET_VERSION,
                 header::HeaderValue::from_static("13"),
-            )
-            .header(
+            ))
+            .insert_header((
                 header::SEC_WEBSOCKET_KEY,
                 header::HeaderValue::from_static("13"),
-            )
-            .header(
+            ))
+            .insert_header((
                 header::SEC_WEBSOCKET_PROTOCOL,
                 header::HeaderValue::from_static("p1,p2,p3"),
-            )
+            ))
             .to_http_request();
 
         let protocols = vec!["p3", "p2"];

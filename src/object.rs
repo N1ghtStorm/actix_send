@@ -90,18 +90,10 @@ macro_rules! object {
     };
 }
 
-#[cfg(not(any(
-    feature = "actix-runtime",
-    feature = "actix-runtime-mpsc",
-    feature = "actix-runtime-local"
-)))]
+#[cfg(not(any(feature = "actix-runtime", feature = "actix-runtime-mpsc")))]
 object!(Send);
 
-#[cfg(any(
-    feature = "actix-runtime",
-    feature = "actix-runtime-mpsc",
-    feature = "actix-runtime-local"
-))]
+#[cfg(any(feature = "actix-runtime", feature = "actix-runtime-mpsc"))]
 object!();
 
 // A container type for packing and unpacking a type to/from a Any trait object

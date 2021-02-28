@@ -18,9 +18,9 @@ macro_rules! spawn_cancel {
         pub(crate) fn spawn_cancelable<F, A, FN, Fut>(f: F, on_ready: FN) -> FutureHandler<A>
         where
             A: Actor,
-            F: Future + Unpin $( + $send)* + 'static,
+            F: Future $( + $send)* + 'static,
             <F as Future>::Output: $($send)*,
-            FN: FnOnce(Either<((), F), (<F as Future>::Output, FinisherFuture)>) -> Fut
+            FN: FnOnce(Either<((), Pin<Box<F>>), (<F as Future>::Output, FinisherFuture)>) -> Fut
                 $( + $send)*
                 + 'static,
             Fut: Future<Output = ()> $( + $send)*,
@@ -30,6 +30,8 @@ macro_rules! spawn_cancel {
             let finisher = FinisherFuture {
                 waker: waker.clone(),
             };
+
+            let f = Box::pin(f);
 
             let future = futures_util::future::select(finisher, f);
             let handler = FutureHandler {
@@ -47,18 +49,10 @@ macro_rules! spawn_cancel {
     };
 }
 
-#[cfg(not(any(
-    feature = "actix-runtime",
-    feature = "actix-runtime-mpsc",
-    feature = "actix-runtime-local"
-)))]
+#[cfg(not(any(feature = "actix-runtime", feature = "actix-runtime-mpsc")))]
 spawn_cancel!(Send);
 
-#[cfg(any(
-    feature = "actix-runtime",
-    feature = "actix-runtime-mpsc",
-    feature = "actix-runtime-local"
-))]
+#[cfg(any(feature = "actix-runtime", feature = "actix-runtime-mpsc"))]
 spawn_cancel!();
 
 // a future notified and polled by future_handler.

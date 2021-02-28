@@ -1,12 +1,13 @@
+use proc_macro2::Span;
 use quote::quote;
 use syn::{
-    export::Span, punctuated::Punctuated, token::Paren, AngleBracketedGenericArguments, Arm, Block,
-    Expr, ExprAsync, ExprAwait, ExprBlock, ExprCall, ExprClosure, ExprMacro, ExprMatch, ExprPath,
-    Field, Fields, FieldsUnnamed, FnArg, GenericArgument, Ident, ImplItem, ImplItemMethod,
-    ImplItemType, Item, ItemEnum, ItemImpl, Local, Macro, MacroDelimiter,
-    ParenthesizedGenericArguments, Pat, PatIdent, PatTuple, PatTupleStruct, PatType, PatWild, Path,
-    PathArguments, PathSegment, Receiver, ReturnType, Signature, Stmt, Type, TypePath, TypeTuple,
-    Variant, VisPublic, Visibility,
+    punctuated::Punctuated, token::Paren, AngleBracketedGenericArguments, Arm, Block, Expr,
+    ExprAsync, ExprAwait, ExprBlock, ExprCall, ExprClosure, ExprMacro, ExprMatch, ExprPath, Field,
+    Fields, FieldsUnnamed, FnArg, GenericArgument, Ident, ImplItem, ImplItemMethod, ImplItemType,
+    Item, ItemEnum, ItemImpl, Local, Macro, MacroDelimiter, ParenthesizedGenericArguments, Pat,
+    PatIdent, PatTuple, PatTupleStruct, PatType, PatWild, Path, PathArguments, PathSegment,
+    Receiver, ReturnType, Signature, Stmt, Type, TypePath, TypeTuple, Variant, VisPublic,
+    Visibility,
 };
 
 use crate::{attr_from_ident_str, path_from_ident_str, type_path_from_idents};

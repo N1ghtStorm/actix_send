@@ -3,14 +3,15 @@ extern crate proc_macro;
 
 use proc_macro::TokenStream;
 
+use proc_macro2::Span;
 use syn::{
-    export::Span, punctuated::Punctuated, token::Paren, AngleBracketedGenericArguments, Arm,
-    AttrStyle, Attribute, AttributeArgs, Block, Expr, ExprAsync, ExprAwait, ExprBlock, ExprCall,
-    ExprClosure, ExprMacro, ExprMatch, ExprPath, Field, Fields, FieldsUnnamed, FnArg,
-    GenericArgument, Generics, Ident, ImplItem, ImplItemMethod, ImplItemType, Item, ItemEnum,
-    ItemImpl, Local, Macro, MacroDelimiter, Meta, NestedMeta, ParenthesizedGenericArguments, Pat,
-    PatIdent, PatTuple, PatTupleStruct, PatType, PatWild, Path, PathArguments, PathSegment,
-    Receiver, ReturnType, Signature, Stmt, Type, TypePath, Variant, VisPublic, Visibility,
+    punctuated::Punctuated, token::Paren, AngleBracketedGenericArguments, Arm, AttrStyle,
+    Attribute, AttributeArgs, Block, Expr, ExprAsync, ExprAwait, ExprBlock, ExprCall, ExprClosure,
+    ExprMacro, ExprMatch, ExprPath, Field, Fields, FieldsUnnamed, FnArg, GenericArgument, Generics,
+    Ident, ImplItem, ImplItemMethod, ImplItemType, Item, ItemEnum, ItemImpl, Local, Macro,
+    MacroDelimiter, Meta, NestedMeta, ParenthesizedGenericArguments, Pat, PatIdent, PatTuple,
+    PatTupleStruct, PatType, PatWild, Path, PathArguments, PathSegment, Receiver, ReturnType,
+    Signature, Stmt, Type, TypePath, Variant, VisPublic, Visibility,
 };
 
 use crate::message::{ActorInfo, HandleMethodInfo};

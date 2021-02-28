@@ -141,12 +141,12 @@ async fn chat_route(server: Data<SharedChatServer>, websocket: WebSocket) -> imp
     // stream is the async iterator for incoming websocket messages.
     // res is the response to client.
     // tx is the sender to add message to response.
-    let (mut stream, res, tx) = websocket.into_parts();
+    let (mut stream, res) = websocket.into_parts();
 
     // spawn the message handling future so we don't block our response to client.
     actix_web::rt::spawn(async move {
         // construct a session.
-        let mut session = WsChatSession::new(&*server, tx);
+        let mut session = WsChatSession::new(&*server, stream.sender().clone());
 
         // iter through the incoming stream of messages.
         while let Some(res) = stream.next().await {
@@ -183,7 +183,7 @@ async fn main() -> std::io::Result<()> {
             // redirect to websocket.html
             .service(web::resource("/").route(web::get().to(|| {
                 HttpResponse::Found()
-                    .header("LOCATION", "/static/websocket.html")
+                    .insert_header(("LOCATION", "/static/websocket.html"))
                     .finish()
             })))
             // websocket route

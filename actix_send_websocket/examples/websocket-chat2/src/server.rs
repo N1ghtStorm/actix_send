@@ -36,6 +36,7 @@ impl Default for ChatServer {
 impl ChatServer {
     // Send message to all users in the room
     pub fn send_message(&mut self, room: &str, message: &str, skip_id: usize) {
+        let msg = bytestring::ByteString::from(message);
         let ids = self.rooms.get(room).map(|sessions| {
             sessions
                 .iter()
@@ -43,9 +44,7 @@ impl ChatServer {
                 .filter_map(|id| self.sessions.get(id).map(|addr| (addr, id)))
                 .filter_map(|(addr, id)| {
                     // collect try_send error session ids.
-                    addr.send(Message::Text(message.to_owned()))
-                        .err()
-                        .map(|_| *id)
+                    addr.send(Message::Text(msg.clone())).err().map(|_| *id)
                 })
                 .collect::<Vec<usize>>()
         });

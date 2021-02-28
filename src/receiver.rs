@@ -9,7 +9,7 @@ use crate::util::channel::Receiver as AsyncChannelReceiver;
 // A wrapper for crate::util::channel::Receiver so we have a unified abstraction for different
 // channels
 
-#[cfg(not(any(feature = "actix-runtime-mpsc", feature = "actix-runtime-local")))]
+#[cfg(not(feature = "actix-runtime-mpsc"))]
 pub mod recv {
     use super::*;
 
@@ -26,22 +26,37 @@ pub mod recv {
             self.inner.recv().await.map_err(|_| ActixSendError::Closed)
         }
     }
+
+    impl<M> Stream for Receiver<M> {
+        type Item = M;
+
+        fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            Pin::new(&mut self.get_mut().inner).poll_next(cx)
+        }
+    }
 }
 
-#[cfg(any(feature = "actix-runtime-mpsc", feature = "actix-runtime-local"))]
+#[cfg(feature = "actix-runtime-mpsc")]
 pub mod recv {
     use super::*;
-    use futures_util::stream::StreamExt;
 
     impl<M> Receiver<M> {
         pub(crate) async fn recv(&mut self) -> Result<M, ActixSendError> {
-            self.inner.next().await.ok_or(ActixSendError::Closed)
+            self.inner.recv().await.ok_or(ActixSendError::Closed)
         }
     }
 
     impl<M> Clone for Receiver<M> {
         fn clone(&self) -> Self {
             panic!("You should not call clone on a mpsc receiver");
+        }
+    }
+
+    impl<M> Stream for Receiver<M> {
+        type Item = M;
+
+        fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            self.get_mut().inner.poll_recv(cx)
         }
     }
 }
@@ -53,14 +68,5 @@ pub struct Receiver<M> {
 impl<M> From<AsyncChannelReceiver<M>> for Receiver<M> {
     fn from(inner: AsyncChannelReceiver<M>) -> Self {
         Self { inner }
-    }
-}
-
-impl<M> Stream for Receiver<M> {
-    type Item = M;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.get_mut();
-        Pin::new(&mut this.inner).poll_next(cx)
     }
 }

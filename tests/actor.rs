@@ -72,7 +72,7 @@ async fn weak_addr() {
 async fn active_count() {
     let address = test_actor_builder().num(8).start().await;
 
-    let _ = tokio::time::delay_for(Duration::from_secs(1)).await;
+    let _ = tokio::time::sleep(Duration::from_secs(1)).await;
 
     assert_eq!(address.current_active(), 8);
 

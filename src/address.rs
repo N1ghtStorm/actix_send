@@ -388,18 +388,10 @@ macro_rules! address_run {
     };
 }
 
-#[cfg(not(any(
-    feature = "actix-runtime",
-    feature = "actix-runtime-mpsc",
-    feature = "actix-runtime-local"
-)))]
+#[cfg(not(any(feature = "actix-runtime", feature = "actix-runtime-mpsc")))]
 address_run!(Send);
 
-#[cfg(any(
-    feature = "actix-runtime",
-    feature = "actix-runtime-mpsc",
-    feature = "actix-runtime-local"
-))]
+#[cfg(any(feature = "actix-runtime", feature = "actix-runtime-mpsc"))]
 address_run!();
 
 pub struct WeakAddress<A>

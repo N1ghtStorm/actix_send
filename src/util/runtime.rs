@@ -54,13 +54,12 @@ macro_rules! runtime_impl {
 #[cfg(not(any(
     feature = "async-std-runtime",
     feature = "actix-runtime",
-    feature = "actix-runtime-mpsc",
-    feature = "actix-runtime-local"
+    feature = "actix-runtime-mpsc"
 )))]
 runtime_impl!(
     tokio::spawn,
-    tokio::time::delay_for,
-    tokio::time::Delay,
+    tokio::time::sleep,
+    tokio::time::Sleep,
     tokio::time::interval,
     tokio::time::Interval,
     tokio::time::timeout,
@@ -72,12 +71,11 @@ runtime_impl!(
 #[cfg(not(any(
     feature = "tokio-runtime",
     feature = "actix-runtime",
-    feature = "actix-runtime-mpsc",
-    feature = "actix-runtime-local"
+    feature = "actix-runtime-mpsc"
 )))]
 runtime_impl!(
     async_std::task::spawn,
-    smol::Timer::new,
+    smol::Timer::after,
     smol::Timer,
     async_std::stream::interval,
     async_std::stream::Interval,
@@ -86,16 +84,12 @@ runtime_impl!(
     Send
 );
 
-#[cfg(any(
-    feature = "actix-runtime",
-    feature = "actix-runtime-mpsc",
-    feature = "actix-runtime-local"
-))]
+#[cfg(any(feature = "actix-runtime", feature = "actix-runtime-mpsc"))]
 #[cfg(not(any(feature = "tokio-runtime", feature = "async-std-runtime")))]
 runtime_impl!(
     actix_rt::spawn,
-    actix_rt::time::delay_for,
-    actix_rt::time::Delay,
+    actix_rt::time::sleep,
+    actix_rt::time::Sleep,
     actix_rt::time::interval,
     actix_rt::time::Interval,
     actix_rt::time::timeout,
@@ -112,8 +106,7 @@ where
     #[cfg(not(any(
         feature = "async-std-runtime",
         feature = "actix-runtime",
-        feature = "actix-runtime-mpsc",
-        feature = "actix-runtime-local"
+        feature = "actix-runtime-mpsc"
     )))]
     {
         tokio::task::spawn_blocking(f)
@@ -125,18 +118,13 @@ where
     #[cfg(not(any(
         feature = "tokio-runtime",
         feature = "actix-runtime",
-        feature = "actix-runtime-mpsc",
-        feature = "actix-runtime-local"
+        feature = "actix-runtime-mpsc"
     )))]
     {
         Ok(async_std::task::spawn_blocking(f).await)
     }
 
-    #[cfg(any(
-        feature = "actix-runtime",
-        feature = "actix-runtime-mpsc",
-        feature = "actix-runtime-local"
-    ))]
+    #[cfg(any(feature = "actix-runtime", feature = "actix-runtime-mpsc"))]
     #[cfg(not(any(feature = "async-std-runtime", feature = "tokio-runtime")))]
     panic!("spawn_blocking does not work for actix-runtime.\r\nPlease use web::block directly in your handle method");
 }

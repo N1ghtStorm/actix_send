@@ -57,10 +57,8 @@ macro_rules! actor {
     }
 }
 
-#[cfg(not(any(feature = "actix-runtime-mpsc", feature = "actix-runtime-local")))]
+#[cfg(not(any(feature = "actix-runtime-mpsc")))]
 actor!(Send);
-#[cfg(feature = "actix-runtime-local")]
-actor!();
 
 #[cfg(feature = "actix-runtime-mpsc")]
 pub trait Actor
@@ -244,7 +242,7 @@ where
     }
 }
 
-#[cfg(not(any(feature = "actix-runtime-mpsc", feature = "actix-runtime-local")))]
+#[cfg(not(feature = "actix-runtime-mpsc"))]
 #[async_trait::async_trait]
 pub trait Handler
 where
@@ -253,7 +251,7 @@ where
     async fn handle(&mut self, msg: Self::Message) -> Self::Result;
 }
 
-#[cfg(any(feature = "actix-runtime-mpsc", feature = "actix-runtime-local"))]
+#[cfg(feature = "actix-runtime-mpsc")]
 #[async_trait::async_trait(?Send)]
 pub trait Handler
 where

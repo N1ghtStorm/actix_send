@@ -2,7 +2,7 @@ pub(crate) use channel_inner::{
     bounded, oneshot_channel, unbounded, OneShotReceiver, OneShotSender, Receiver, Sender,
 };
 
-#[cfg(not(any(feature = "actix-runtime-mpsc", feature = "actix-runtime-local")))]
+#[cfg(not(any(feature = "actix-runtime-mpsc")))]
 pub(crate) mod channel_inner {
     pub(crate) use async_channel::{Receiver, Sender};
     pub(crate) use tokio::sync::oneshot::{
@@ -15,24 +15,6 @@ pub(crate) mod channel_inner {
 
     pub(crate) fn unbounded<A>() -> (Sender<A>, Receiver<A>) {
         async_channel::unbounded()
-    }
-}
-
-#[cfg(feature = "actix-runtime-local")]
-pub(crate) mod channel_inner {
-    pub(crate) use actix_utils::{
-        mpsc::{Receiver, Sender},
-        oneshot::{
-            channel as oneshot_channel, Receiver as OneShotReceiver, Sender as OneShotSender,
-        },
-    };
-
-    pub(crate) fn bounded<A>(_cap: usize) -> (Sender<A>, Receiver<A>) {
-        actix_utils::mpsc::channel()
-    }
-
-    pub(crate) fn unbounded<A>() -> (Sender<A>, Receiver<A>) {
-        actix_utils::mpsc::channel()
     }
 }
 

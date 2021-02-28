@@ -31,7 +31,7 @@ async fn main() {
         async fn handle(&mut self, _: Message1) -> RefCell<u8> {
             let mut cell = RefCell::new(123);
 
-            let _ = actix_rt::time::delay_for(Duration::from_millis(1)).await;
+            let _ = actix_rt::time::sleep(Duration::from_millis(1)).await;
 
             // the handle method doesn't have to be Send. so we can use RefCell across await point.
             println!("refcell is: {:?}", &mut cell);
@@ -63,7 +63,7 @@ async fn main() {
 
             let rc = Rc::new(123);
             Box::pin(async move {
-                let _ = actix_rt::time::delay_for(Duration::from_millis(1)).await;
+                let _ = actix_rt::time::sleep(Duration::from_millis(1)).await;
 
                 // the boxed future doesn't have to be Send. so we can use Rc across await point.
                 println!("Rc is: {}", &rc);
@@ -109,7 +109,7 @@ async fn main() {
         .start_with_arbiters(&arbiters[2..5], None)
         .await;
 
-    let _ = actix_rt::time::delay_for(Duration::from_secs(1)).await;
+    let _ = actix_rt::time::sleep(Duration::from_secs(1)).await;
 
     println!(
         "current active actor count is: {}",

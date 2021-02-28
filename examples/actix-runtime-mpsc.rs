@@ -16,7 +16,9 @@ async fn main() {
     // handler implement
     #[handler_v2(no_send)]
     impl MyActor {
-        async fn handle_msg1(&mut self, _msg1: Message1) {}
+        async fn handle_msg1(&mut self, _msg1: Message1) {
+            println!("{:?}", self.state);
+        }
 
         // the name of handle method is not important at all.
         // It's only used to make IDE happy when actually we transfer them to Actor::handle

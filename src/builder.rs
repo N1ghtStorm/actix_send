@@ -212,15 +212,15 @@ where
                 arbiters
                     .get(index)
                     .expect("Vec<Arbiters> index overflow")
-                    .exec_fn({
+                    .spawn_fn({
                         let tx = tx.downgrade();
                         let state = state.clone();
                         move || {
-                            actix_rt::Arbiter::spawn(async move {
+                            actix_rt::spawn(async move {
                                 let actor = builder.build().await;
                                 let ctx = ActorContext::new(0, tx, rx.into(), None, actor, state);
                                 ctx.spawn_loop();
-                            })
+                            });
                         }
                     });
 
@@ -238,12 +238,12 @@ where
                     arbiters
                         .get(index)
                         .expect("Vec<Arbiters> index overflow")
-                        .exec_fn({
+                        .spawn_fn({
                             let tx = tx.downgrade();
                             let rx = rx.clone();
                             let state = state.clone();
                             move || {
-                                actix_rt::Arbiter::spawn(async move {
+                                actix_rt::spawn(async move {
                                     let actor = builder.build().await;
 
                                     ActorContext::new(
@@ -255,7 +255,7 @@ where
                                         state,
                                     )
                                     .spawn_loop();
-                                })
+                                });
                             }
                         });
                 }

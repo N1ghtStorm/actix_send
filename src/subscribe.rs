@@ -63,11 +63,7 @@ macro_rules! subscribe {
     }
 }
 
-#[cfg(not(feature = "actix-runtime-local"))]
 subscribe!(Send);
-
-#[cfg(feature = "actix-runtime-local")]
-subscribe!();
 
 impl Default for Subscribe {
     fn default() -> Self {

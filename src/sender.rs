@@ -50,7 +50,7 @@ where
     }
 }
 
-#[cfg(not(any(feature = "actix-runtime-mpsc", feature = "actix-runtime-local")))]
+#[cfg(not(any(feature = "actix-runtime-mpsc")))]
 impl<M> Sender<M>
 where
     M: 'static,
@@ -67,7 +67,7 @@ where
     }
 }
 
-#[cfg(any(feature = "actix-runtime-mpsc", feature = "actix-runtime-local"))]
+#[cfg(any(feature = "actix-runtime-mpsc"))]
 impl<M> Sender<M>
 where
     M: 'static,
