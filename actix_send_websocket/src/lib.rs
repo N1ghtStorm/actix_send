@@ -170,7 +170,7 @@ const DEFAULT_CONFIG: WsConfig = WsConfig {
 
 impl Default for WsConfig {
     fn default() -> Self {
-        DEFAULT_CONFIG.clone()
+        DEFAULT_CONFIG
     }
 }
 
@@ -311,32 +311,29 @@ where
 
         loop {
             if !this.buf.is_empty() {
-                match this.codec.decode(this.buf)? {
-                    Some(frm) => {
-                        let msg = match frm {
-                            Frame::Text(data) => {
-                                Message::Text(ByteString::try_from(data).map_err(|e| {
-                                    ProtocolError::Io(io::Error::new(
-                                        io::ErrorKind::Other,
-                                        format!("{}", e),
-                                    ))
-                                })?)
-                            }
-                            Frame::Binary(data) => Message::Binary(data),
-                            Frame::Ping(s) => {
-                                this.manager.update_hb();
-                                Message::Ping(s)
-                            }
-                            Frame::Pong(s) => {
-                                this.manager.update_hb();
-                                Message::Pong(s)
-                            }
-                            Frame::Close(reason) => Message::Close(reason),
-                            Frame::Continuation(item) => Message::Continuation(item),
-                        };
-                        return Poll::Ready(Some(Ok(msg)));
-                    }
-                    None => {}
+                if let Some(frame) = this.codec.decode(this.buf)? {
+                    let msg = match frame {
+                        Frame::Text(data) => {
+                            Message::Text(ByteString::try_from(data).map_err(|e| {
+                                ProtocolError::Io(io::Error::new(
+                                    io::ErrorKind::Other,
+                                    format!("{}", e),
+                                ))
+                            })?)
+                        }
+                        Frame::Binary(data) => Message::Binary(data),
+                        Frame::Ping(s) => {
+                            this.manager.update_hb();
+                            Message::Ping(s)
+                        }
+                        Frame::Pong(s) => {
+                            this.manager.update_hb();
+                            Message::Pong(s)
+                        }
+                        Frame::Close(reason) => Message::Close(reason),
+                        Frame::Continuation(item) => Message::Continuation(item),
+                    };
+                    return Poll::Ready(Some(Ok(msg)));
                 }
             }
 
@@ -357,7 +354,7 @@ where
                             if this.manager.set_hb(hb.as_mut()) {
                                 let _ = hb.poll(cx);
                                 if this.manager.server_send_heartbeat {
-                                    // TODO: work out this timeout
+                                    // TODO: work out this timeout error
                                     this.tx.ping(b"ping").map_err(|e| {
                                         ProtocolError::Io(io::Error::new(
                                             io::ErrorKind::Other,
@@ -398,7 +395,13 @@ impl Stream for EncodeStream {
 
         loop {
             match Pin::new(&mut this.rx).poll_recv(cx) {
-                Poll::Ready(Some(msg)) => this.codec.encode(msg, &mut this.buf)?,
+                Poll::Ready(Some(msg)) => {
+                    if let Message::Close(_) = msg {
+                        // Close the receiver on close message.
+                        this.rx.close();
+                    }
+                    this.codec.encode(msg, &mut this.buf)?
+                },
                 Poll::Pending => {
                     return if !this.buf.is_empty() {
                         Poll::Ready(Some(Ok(this.buf.split().freeze())))
