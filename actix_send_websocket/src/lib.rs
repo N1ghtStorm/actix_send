@@ -4,16 +4,18 @@
 //! ```rust,no_run
 //! use actix_web::{get, App, Error, HttpRequest, HttpServer, Responder};
 //! use actix_send_websocket::{Message, WebSocket};
+//! use futures_util::StreamExt;
 //!
 //! #[get("/")]
 //! async fn ws(ws: WebSocket) -> impl Responder {
 //!     // stream is the async iterator of incoming client websocket messages.
 //!     // res is the response we return to client.
 //!     // tx is a sender to push new websocket message to client response.
-//!     let (mut stream, res) = ws.into_parts();
+//!     let (stream, res) = ws.into_parts();
 //!
 //!     // spawn the stream handling so we don't block the response to client.
 //!     actix_web::rt::spawn(async move {
+//!         actix_web::rt::pin!(stream);
 //!         while let Some(Ok(msg)) = stream.next().await {
 //!             let result = match msg {
 //!                 // we echo text message and ping message to client.
@@ -49,7 +51,7 @@
 #![forbid(unsafe_code)]
 #![forbid(unused_variables)]
 
-use core::cell::Cell;
+use core::convert::TryFrom;
 use core::fmt::{Debug, Display};
 use core::future::Future;
 use core::ops::Deref;
@@ -58,8 +60,6 @@ use core::task::{Context, Poll};
 use core::time::Duration;
 
 use std::io;
-use std::rc::Rc;
-use std::time::Instant;
 
 use actix_codec::{Decoder, Encoder};
 pub use actix_http::ws::{
@@ -70,20 +70,14 @@ use actix_http::{
     http::{header, Method, StatusCode},
     Payload, Response, ResponseBuilder,
 };
-use actix_utils::task::LocalWaker;
 use actix_web::{
-    rt,
+    rt::time::{sleep, Instant, Sleep},
     web::{Bytes, BytesMut, Data},
     FromRequest, HttpRequest,
 };
 use bytestring::ByteString;
-use futures_util::{
-    // ToDo: move to std::future::{ready, Ready} when 1.48 hits stable.
-    future::{ready, Ready},
-    ready,
-    // ToDo: move to std::future::stream whenever it's stable.
-    stream::Stream,
-};
+use futures_core::stream::Stream;
+use futures_util::future::{ready, Ready};
 
 /// config for WebSockets.
 ///
@@ -220,26 +214,27 @@ pub fn split_stream<S>(cfg: &WsConfig, stream: S) -> (WebSocketStream<S>, Encode
 
     let codec = cfg.codec.unwrap_or_else(Codec::new);
 
+    let (hb, interval) = match cfg.heartbeat {
+        Some(dur) => (Some(sleep(dur)), dur),
+        None => (None, Duration::from_secs(1)),
+    };
+
     (
         WebSocketStream {
             decode: DecodeStream {
-                manager: DecodeStreamManager::new(
-                    cfg.heartbeat,
-                    cfg.timeout,
-                    cfg.server_send_heartbeat,
-                    tx.clone(),
-                )
-                .start(),
+                tx: tx.clone(),
+                manager: HeartBeat::new(interval, cfg.timeout, cfg.server_send_heartbeat),
+                hb,
                 stream,
                 codec,
-                buf: Default::default(),
+                buf: BytesMut::new(),
             },
             tx,
         },
         EncodeStream {
             rx,
             codec,
-            buf: Default::default(),
+            buf: BytesMut::new(),
         },
     )
 }
@@ -263,11 +258,13 @@ impl<S> Deref for WebSocketStream<S> {
 impl<S> WebSocketStream<S> {
     /// Get a reference of the sender.
     /// `WebSocketSender` can be used to push response message to client.
+    #[inline]
     pub fn sender(&self) -> &WebSocketSender {
         &self.tx
     }
 
     /// Owned version of `WebSocketStream::sender` API.
+    #[inline]
     pub fn sender_owned(&self) -> WebSocketSender {
         self.tx.clone()
     }
@@ -281,6 +278,7 @@ where
     // Decode error is packed with websocket Message and return as a Result.
     type Item = Result<Message, ProtocolError>;
 
+    #[inline]
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.project().decode.poll_next(cx)
     }
@@ -289,9 +287,12 @@ where
 // decode incoming stream.
 pin_project_lite::pin_project! {
      struct DecodeStream<S> {
-        manager: DecodeStreamManager,
+        manager: HeartBeat,
+        tx: WebSocketSender,
         #[pin]
         stream: S,
+        #[pin]
+        hb: Option<Sleep>,
         codec: Codec,
         buf: BytesMut,
     }
@@ -308,37 +309,26 @@ where
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.as_mut().project();
 
-        // resolve when heartbeat future is gone.
-        if this.manager.enable_heartbeat {
-            if this.manager.is_heartbeat_future_closed() {
-                return Poll::Ready(None);
-            }
-
-            this.manager.register_decode_stream_waker(cx);
-        }
-
         loop {
             if !this.buf.is_empty() {
-                match this.codec.decode(this.buf) {
-                    Ok(Some(frm)) => {
+                match this.codec.decode(this.buf)? {
+                    Some(frm) => {
                         let msg = match frm {
-                            Frame::Text(data) => Message::Text(
-                                std::str::from_utf8(&data)
-                                    .map_err(|e| {
-                                        ProtocolError::Io(io::Error::new(
-                                            io::ErrorKind::Other,
-                                            format!("{}", e),
-                                        ))
-                                    })?
-                                    .into(),
-                            ),
+                            Frame::Text(data) => {
+                                Message::Text(ByteString::try_from(data).map_err(|e| {
+                                    ProtocolError::Io(io::Error::new(
+                                        io::ErrorKind::Other,
+                                        format!("{}", e),
+                                    ))
+                                })?)
+                            }
                             Frame::Binary(data) => Message::Binary(data),
                             Frame::Ping(s) => {
-                                this.manager.update_heartbeat_ping();
+                                this.manager.update_hb();
                                 Message::Ping(s)
                             }
                             Frame::Pong(s) => {
-                                this.manager.update_heartbeat_pong();
+                                this.manager.update_hb();
                                 Message::Pong(s)
                             }
                             Frame::Close(reason) => Message::Close(reason),
@@ -346,42 +336,70 @@ where
                         };
                         return Poll::Ready(Some(Ok(msg)));
                     }
-                    Ok(None) => (),
-                    Err(e) => return Poll::Ready(Some(Err(e))),
+                    None => {}
                 }
             }
 
-            match ready!(this.stream.poll_next(cx)) {
-                Some(Ok(chunk)) => {
-                    this.buf.extend(&chunk);
-                    this = self.as_mut().project();
+            match this.stream.as_mut().poll_next(cx) {
+                Poll::Ready(Some(Ok(chunk))) => {
+                    this.buf.extend_from_slice(&chunk[..]);
                 }
-                Some(Err(e)) => {
+                Poll::Ready(Some(Err(e))) => {
                     return Poll::Ready(Some(Err(ProtocolError::Io(io::Error::new(
                         io::ErrorKind::Other,
                         format!("{}", e),
                     )))));
                 }
-                None => return Poll::Ready(None),
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Pending => {
+                    if let Some(mut hb) = this.hb.as_pin_mut() {
+                        if hb.as_mut().poll(cx).is_ready() {
+                            if this.manager.set_hb(hb.as_mut()) {
+                                let _ = hb.poll(cx);
+                                if this.manager.server_send_heartbeat {
+                                    // TODO: work out this timeout
+                                    this.tx.ping(b"ping").map_err(|e| {
+                                        ProtocolError::Io(io::Error::new(
+                                            io::ErrorKind::Other,
+                                            format!("{}", e),
+                                        ))
+                                    })?;
+                                }
+                            } else {
+                                this.tx.close(Some(CloseCode::Normal.into())).map_err(|e| {
+                                    ProtocolError::Io(io::Error::new(
+                                        io::ErrorKind::Other,
+                                        format!("{}", e),
+                                    ))
+                                })?;
+                                return Poll::Ready(None);
+                            }
+                        }
+                    }
+
+                    return Poll::Pending;
+                }
             }
         }
     }
 }
 
-#[allow(clippy::should_implement_trait)]
-impl<E, S> WebSocketStream<S>
-where
-    S: Stream<Item = Result<Bytes, E>> + Unpin,
-    E: Debug + Display,
-{
-    pub fn next(&mut self) -> futures_util::stream::Next<'_, Self> {
-        futures_util::stream::StreamExt::next(self)
-    }
+// #[allow(clippy::should_implement_trait)]
+// impl<E, S> WebSocketStream<S>
+// where
+//     S: Stream<Item = Result<Bytes, E>>,
+//     E: Debug + Display,
+// {
+//     #[inline]
+//     pub fn next(&mut self) -> futures_util::stream::Next<'_, Self> {
+//         futures_util::stream::StreamExt::next(self)
+//     }
 
-    pub fn try_next(&mut self) -> futures_util::stream::TryNext<'_, Self> {
-        futures_util::stream::TryStreamExt::try_next(self)
-    }
-}
+//     #[inline]
+//     pub fn try_next(&mut self) -> futures_util::stream::TryNext<'_, Self> {
+//         futures_util::stream::TryStreamExt::try_next(self)
+//     }
+// }
 
 pub struct EncodeStream {
     rx: channel::Receiver<Message>,
@@ -395,151 +413,61 @@ impl Stream for EncodeStream {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
 
-        match ready!(Pin::new(&mut this.rx).poll_recv(cx)) {
-            Some(msg) => match this.codec.encode(msg, &mut this.buf) {
-                Ok(()) => Poll::Ready(Some(Ok(this.buf.split().freeze()))),
-                Err(e) => Poll::Ready(Some(Err(e.into()))),
-            },
-            None => Poll::Ready(None),
+        loop {
+            match Pin::new(&mut this.rx).poll_recv(cx) {
+                Poll::Ready(Some(msg)) => this.codec.encode(msg, &mut this.buf)?,
+                Poll::Pending => {
+                    return if !this.buf.is_empty() {
+                        Poll::Ready(Some(Ok(this.buf.split().freeze())))
+                    } else {
+                        Poll::Pending
+                    }
+                }
+                Poll::Ready(None) => {
+                    return if !this.buf.is_empty() {
+                        // Self wake up to properly end the stream
+                        cx.waker().wake_by_ref();
+                        Poll::Ready(Some(Ok(this.buf.split().freeze())))
+                    } else {
+                        Poll::Ready(None)
+                    };
+                }
+            }
         }
     }
 }
 
 #[derive(Clone)]
-struct DecodeStreamManager {
-    decode_stream_waker: Rc<LocalWaker>,
-    heartbeat_future_waker: Rc<LocalWaker>,
-    enable_heartbeat: bool,
+struct HeartBeat {
     server_send_heartbeat: bool,
-    interval: Option<Duration>,
+    interval: Duration,
     timeout: Duration,
-    heartbeat: Rc<Cell<Instant>>,
-    tx: WebSocketSender,
+    deadline: Instant,
 }
 
-// try wake up decode stream and heartbeat future when dropping manager.
-impl Drop for DecodeStreamManager {
-    fn drop(&mut self) {
-        self.decode_stream_waker.wake();
-        self.heartbeat_future_waker.wake();
-    }
-}
-
-impl DecodeStreamManager {
+impl HeartBeat {
     #[inline]
-    fn new(
-        interval: Option<Duration>,
-        timeout: Duration,
-        server_send_heartbeat: bool,
-        tx: WebSocketSender,
-    ) -> Self {
+    fn new(interval: Duration, timeout: Duration, server_send_heartbeat: bool) -> Self {
         Self {
-            decode_stream_waker: Rc::new(Default::default()),
-            heartbeat_future_waker: Rc::new(Default::default()),
-            enable_heartbeat: interval.is_some(),
             server_send_heartbeat,
             interval,
             timeout,
-            heartbeat: Rc::new(Cell::new(Instant::now())),
-            tx,
+            deadline: Instant::now() + timeout,
         }
     }
 
-    #[inline]
-    fn start(self) -> Self {
-        if let Some(interval) = self.interval {
-            let manager = self.clone();
-            rt::spawn(async move {
-                loop {
-                    let is_shutdown = HeartbeatFuture::new(interval, &manager).await;
-
-                    if is_shutdown {
-                        break;
-                    }
-
-                    if manager.server_send_heartbeat && manager.tx.ping(b"ping").is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-
-        self
+    fn update_hb(&mut self) {
+        self.deadline = Instant::now() + self.timeout;
     }
 
-    fn register_decode_stream_waker(&self, cx: &mut Context<'_>) {
-        self.decode_stream_waker.register(cx.waker());
-    }
-
-    fn register_heartbeat_future_waker(&self, cx: &mut Context<'_>) {
-        self.heartbeat_future_waker.register(cx.waker());
-    }
-
-    fn is_timeout(&self) -> bool {
-        let heartbeat = self.heartbeat.get();
-        if Instant::now().duration_since(heartbeat) > self.timeout {
-            let _ = self.tx.send(Message::Close(Some(CloseCode::Normal.into())));
-            true
-        } else {
+    fn set_hb(&self, hb: Pin<&mut Sleep>) -> bool {
+        let now = hb.deadline();
+        if now >= self.deadline {
             false
+        } else {
+            hb.reset(now + self.interval);
+            true
         }
-    }
-
-    fn update_heartbeat_ping(&self) {
-        if self.enable_heartbeat {
-            self.update_heartbeat();
-        }
-    }
-
-    fn update_heartbeat_pong(&self) {
-        if self.server_send_heartbeat {
-            self.update_heartbeat();
-        }
-    }
-
-    fn update_heartbeat(&self) {
-        self.heartbeat.set(Instant::now());
-    }
-
-    fn is_heartbeat_future_closed(&self) -> bool {
-        Rc::strong_count(&self.heartbeat_future_waker) == 1
-    }
-
-    fn is_decode_stream_closed(&self) -> bool {
-        Rc::strong_count(&self.decode_stream_waker) == 1
-    }
-}
-
-pin_project_lite::pin_project! {
-    struct HeartbeatFuture<'a> {
-        manager: &'a DecodeStreamManager,
-        #[pin]
-        delay: rt::time::Sleep,
-    }
-}
-
-impl<'a> HeartbeatFuture<'a> {
-    fn new(dur: Duration, manager: &'a DecodeStreamManager) -> Self {
-        Self {
-            manager,
-            delay: rt::time::sleep(dur),
-        }
-    }
-}
-
-impl Future for HeartbeatFuture<'_> {
-    type Output = bool;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
-
-        if this.manager.is_timeout() || this.manager.is_decode_stream_closed() {
-            return Poll::Ready(true);
-        }
-
-        this.manager.register_heartbeat_future_waker(cx);
-
-        this.delay.poll(cx).map(|_| false)
     }
 }
 
@@ -661,7 +589,7 @@ pub fn handshake_with_protocols(
     let mut response = Response::build(StatusCode::SWITCHING_PROTOCOLS)
         .upgrade("websocket")
         .insert_header((header::TRANSFER_ENCODING, "chunked"))
-        .insert_header((header::SEC_WEBSOCKET_ACCEPT, key.as_str()))
+        .insert_header((header::SEC_WEBSOCKET_ACCEPT, &key[..]))
         .take();
 
     if let Some(protocol) = protocol {
@@ -682,6 +610,7 @@ mod channel {
 
     impl super::WebSocketSender {
         /// send the message asynchronously.
+        #[inline]
         pub fn send(&self, message: Message) -> Result<(), Error> {
             self.0.send(message).map_err(ErrorInternalServerError)
         }

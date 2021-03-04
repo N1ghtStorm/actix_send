@@ -5,8 +5,9 @@ use actix_web::{get, test, web::Bytes, App, Responder};
 use futures_util::{SinkExt, StreamExt};
 
 #[get("/")]
-async fn handler(WebSocket(mut stream, res): WebSocket) -> impl Responder {
+async fn handler(WebSocket(stream, res): WebSocket) -> impl Responder {
     actix_web::rt::spawn(async move {
+        actix_web::rt::pin!(stream);
         while let Some(Ok(msg)) = stream.next().await {
             let result = match msg {
                 Message::Text(str) => stream.text(str),
@@ -95,7 +96,7 @@ async fn test_server_send_heartbeat() {
         App::new()
             .app_data(
                 WsConfig::new()
-                    .heartbeat(Duration::from_millis(500))
+                    .heartbeat(Duration::from_millis(600))
                     .enable_server_send_heartbeat()
                     .timeout(Duration::from_secs(1)),
             )
