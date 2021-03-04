@@ -1,3 +1,8 @@
+## 0.2.1 - 2021-03-04
+### Changed
+- `WebSocketStream` must be pinned for collect the stream. This can be done with `actix_web::rt::pin`.
+- Rework heartbeat and reduce memory usage. 
+
 ## 0.2.0 - 2021-02-28
 ### Changed
 - update to `actix-web v4`

@@ -384,23 +384,6 @@ where
     }
 }
 
-// #[allow(clippy::should_implement_trait)]
-// impl<E, S> WebSocketStream<S>
-// where
-//     S: Stream<Item = Result<Bytes, E>>,
-//     E: Debug + Display,
-// {
-//     #[inline]
-//     pub fn next(&mut self) -> futures_util::stream::Next<'_, Self> {
-//         futures_util::stream::StreamExt::next(self)
-//     }
-
-//     #[inline]
-//     pub fn try_next(&mut self) -> futures_util::stream::TryNext<'_, Self> {
-//         futures_util::stream::TryStreamExt::try_next(self)
-//     }
-// }
-
 pub struct EncodeStream {
     rx: channel::Receiver<Message>,
     codec: Codec,
