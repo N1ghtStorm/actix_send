@@ -192,12 +192,15 @@ impl FromRequest for WebSocket {
     fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
         let cfg = Self::Config::from_req(req);
 
-        let protocols = match cfg.protocols {
-            Some(ref protocols) => protocols.iter().map(|f| f.as_str()).collect::<Vec<_>>(),
-            None => Vec::with_capacity(0),
+        let res = match cfg.protocols {
+            Some(ref protocols) => {
+                let protocols = protocols.iter().map(|f| f.as_str()).collect::<Vec<_>>();
+                handshake_with_protocols(&req, &protocols)
+            }
+            None => handshake_with_protocols(&req, &[]),
         };
 
-        match handshake_with_protocols(&req, &protocols) {
+        match res {
             Ok(mut res) => {
                 let (stream, encode) = split_stream(cfg, payload.take());
                 ready(Ok(WebSocket(stream, res.streaming(encode))))
@@ -214,7 +217,7 @@ pub fn split_stream<S>(cfg: &WsConfig, stream: S) -> (WebSocketStream<S>, Encode
 
     let codec = cfg.codec.unwrap_or_else(Codec::new);
 
-    let (hb, interval) = match cfg.heartbeat {
+    let (timer, interval) = match cfg.heartbeat {
         Some(dur) => (Some(sleep(dur)), dur),
         None => (None, Duration::from_secs(1)),
     };
@@ -222,19 +225,19 @@ pub fn split_stream<S>(cfg: &WsConfig, stream: S) -> (WebSocketStream<S>, Encode
     (
         WebSocketStream {
             decode: DecodeStream {
-                tx: tx.clone(),
-                manager: HeartBeat::new(interval, cfg.timeout, cfg.server_send_heartbeat),
-                hb,
                 stream,
+                timer,
+                hb: HeartBeat::new(interval, cfg.timeout, cfg.server_send_heartbeat),
+                tx: tx.clone(),
                 codec,
-                buf: BytesMut::new(),
+                read_buf: BytesMut::new(),
             },
             tx,
         },
         EncodeStream {
             rx,
             codec,
-            buf: BytesMut::new(),
+            write_buf: BytesMut::new(),
         },
     )
 }
@@ -287,14 +290,14 @@ where
 // decode incoming stream.
 pin_project_lite::pin_project! {
      struct DecodeStream<S> {
-        manager: HeartBeat,
-        tx: WebSocketSender,
         #[pin]
         stream: S,
         #[pin]
-        hb: Option<Sleep>,
+        timer: Option<Sleep>,
+        hb: HeartBeat,
+        tx: WebSocketSender,
         codec: Codec,
-        buf: BytesMut,
+        read_buf: BytesMut,
     }
 }
 
@@ -310,8 +313,8 @@ where
         let mut this = self.as_mut().project();
 
         loop {
-            if !this.buf.is_empty() {
-                if let Some(frame) = this.codec.decode(this.buf)? {
+            if !this.read_buf.is_empty() {
+                if let Some(frame) = this.codec.decode(this.read_buf)? {
                     let msg = match frame {
                         Frame::Text(data) => {
                             Message::Text(ByteString::try_from(data).map_err(|e| {
@@ -323,11 +326,11 @@ where
                         }
                         Frame::Binary(data) => Message::Binary(data),
                         Frame::Ping(s) => {
-                            this.manager.update_hb();
+                            this.hb.update();
                             Message::Ping(s)
                         }
                         Frame::Pong(s) => {
-                            this.manager.update_hb();
+                            this.hb.update();
                             Message::Pong(s)
                         }
                         Frame::Close(reason) => Message::Close(reason),
@@ -339,7 +342,7 @@ where
 
             match this.stream.as_mut().poll_next(cx) {
                 Poll::Ready(Some(Ok(chunk))) => {
-                    this.buf.extend_from_slice(&chunk[..]);
+                    this.read_buf.extend_from_slice(&chunk[..]);
                 }
                 Poll::Ready(Some(Err(e))) => {
                     return Poll::Ready(Some(Err(ProtocolError::Io(io::Error::new(
@@ -349,11 +352,11 @@ where
                 }
                 Poll::Ready(None) => return Poll::Ready(None),
                 Poll::Pending => {
-                    if let Some(mut hb) = this.hb.as_pin_mut() {
-                        if hb.as_mut().poll(cx).is_ready() {
-                            if this.manager.set_hb(hb.as_mut()) {
-                                let _ = hb.poll(cx);
-                                if this.manager.server_send_heartbeat {
+                    if let Some(mut timer) = this.timer.as_pin_mut() {
+                        if timer.as_mut().poll(cx).is_ready() {
+                            if this.hb.set(timer.as_mut()) {
+                                let _ = timer.poll(cx);
+                                if this.hb.server_send_heartbeat {
                                     // TODO: work out this timeout error
                                     this.tx.ping(b"ping").map_err(|e| {
                                         ProtocolError::Io(io::Error::new(
@@ -384,7 +387,7 @@ where
 pub struct EncodeStream {
     rx: channel::Receiver<Message>,
     codec: Codec,
-    buf: BytesMut,
+    write_buf: BytesMut,
 }
 
 impl Stream for EncodeStream {
@@ -400,20 +403,20 @@ impl Stream for EncodeStream {
                         // Close the receiver on close message.
                         this.rx.close();
                     }
-                    this.codec.encode(msg, &mut this.buf)?
-                },
+                    this.codec.encode(msg, &mut this.write_buf)?
+                }
                 Poll::Pending => {
-                    return if !this.buf.is_empty() {
-                        Poll::Ready(Some(Ok(this.buf.split().freeze())))
+                    return if !this.write_buf.is_empty() {
+                        Poll::Ready(Some(Ok(this.write_buf.split().freeze())))
                     } else {
                         Poll::Pending
                     }
                 }
                 Poll::Ready(None) => {
-                    return if !this.buf.is_empty() {
+                    return if !this.write_buf.is_empty() {
                         // Self wake up to properly end the stream
                         cx.waker().wake_by_ref();
-                        Poll::Ready(Some(Ok(this.buf.split().freeze())))
+                        Poll::Ready(Some(Ok(this.write_buf.split().freeze())))
                     } else {
                         Poll::Ready(None)
                     };
@@ -442,11 +445,11 @@ impl HeartBeat {
         }
     }
 
-    fn update_hb(&mut self) {
+    fn update(&mut self) {
         self.deadline = Instant::now() + self.timeout;
     }
 
-    fn set_hb(&self, hb: Pin<&mut Sleep>) -> bool {
+    fn set(&self, hb: Pin<&mut Sleep>) -> bool {
         let now = hb.deadline();
         if now >= self.deadline {
             false
