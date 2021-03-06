@@ -77,7 +77,6 @@ use actix_web::{
 };
 use bytestring::ByteString;
 use futures_core::stream::Stream;
-use futures_util::future::{ready, Ready};
 
 /// config for WebSockets.
 ///
@@ -187,7 +186,7 @@ impl WebSocket {
 impl FromRequest for WebSocket {
     type Config = WsConfig;
     type Error = Error;
-    type Future = Ready<Result<Self, Self::Error>>;
+    type Future = WebSocketFuture<Result<Self, Self::Error>>;
 
     fn from_request(req: &HttpRequest, payload: &mut Payload) -> Self::Future {
         let cfg = Self::Config::from_req(req);
@@ -203,10 +202,30 @@ impl FromRequest for WebSocket {
         match res {
             Ok(mut res) => {
                 let (stream, encode) = split_stream(cfg, payload.take());
-                ready(Ok(WebSocket(stream, res.streaming(encode))))
+                WebSocketFuture::new(Ok(WebSocket(stream, res.streaming(encode))))
             }
-            Err(e) => ready(Err(e.into())),
+            Err(e) => WebSocketFuture::new(Err(e.into())),
         }
+    }
+}
+
+pin_project_lite::pin_project! {
+    pub struct WebSocketFuture<T> {
+        res: Option<T>
+    }
+}
+
+impl<T> WebSocketFuture<T> {
+    fn new(res: T) -> Self {
+        Self { res: Some(res) }
+    }
+}
+
+impl<T> Future for WebSocketFuture<T> {
+    type Output = T;
+
+    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+        Poll::Ready(self.project().res.take().unwrap())
     }
 }
 
