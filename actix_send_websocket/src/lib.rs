@@ -17,22 +17,18 @@
 //!     actix_web::rt::spawn(async move {
 //!         actix_web::rt::pin!(stream);
 //!         while let Some(Ok(msg)) = stream.next().await {
-//!             let result = match msg {
+//!             match msg {
 //!                 // we echo text message and ping message to client.
 //!                 Message::Text(string) => stream.text(string),
 //!                 Message::Ping(bytes) => stream.pong(&bytes),
 //!                 Message::Close(reason) => {
-//!                     let _ = stream.close(reason);
+//!                     stream.close(reason);
 //!                     // force end the stream when we have a close message.
 //!                     break;
 //!                 }
 //!                 // other types of message would be ignored
-//!                 _ => Ok(()),
+//!                 _ => {},
 //!             };
-//!             if result.is_err() {
-//!                 // end the stream when the response is gone.
-//!                 break;
-//!             }
 //!         }   
 //!     });
 //!
@@ -51,15 +47,18 @@
 #![forbid(unsafe_code)]
 #![forbid(unused_variables)]
 
+use core::cell::RefCell;
 use core::convert::TryFrom;
 use core::fmt::{Debug, Display};
 use core::future::Future;
 use core::ops::Deref;
 use core::pin::Pin;
-use core::task::{Context, Poll};
+use core::task::{Context, Poll, Waker};
 use core::time::Duration;
 
+use std::collections::VecDeque;
 use std::io;
+use std::rc::Rc;
 
 use actix_codec::{Decoder, Encoder};
 pub use actix_http::ws::{
@@ -232,7 +231,6 @@ impl<T> Future for WebSocketFuture<T> {
 /// split stream into decode/encode streams and a sender that can send item to encode stream.
 pub fn split_stream<S>(cfg: &WsConfig, stream: S) -> (WebSocketStream<S>, EncodeStream) {
     let (tx, rx) = channel::channel();
-    let tx = WebSocketSender(tx);
 
     let codec = cfg.codec.unwrap_or_else(Codec::new);
 
@@ -241,19 +239,22 @@ pub fn split_stream<S>(cfg: &WsConfig, stream: S) -> (WebSocketStream<S>, Encode
         None => (None, Duration::from_secs(1)),
     };
 
+    let queue = WebSocketLocalQueue::new();
+
     (
         WebSocketStream {
             decode: DecodeStream {
                 stream,
                 timer,
                 hb: HeartBeat::new(interval, cfg.timeout, cfg.server_send_heartbeat),
-                tx: tx.clone(),
+                queue: queue.clone(),
                 codec,
                 read_buf: BytesMut::new(),
             },
-            tx,
+            tx: WebSocketSender(tx),
         },
         EncodeStream {
+            queue,
             rx,
             codec,
             write_buf: BytesMut::new(),
@@ -270,24 +271,18 @@ pin_project_lite::pin_project! {
 }
 
 impl<S> Deref for WebSocketStream<S> {
-    type Target = WebSocketSender;
+    type Target = WebSocketLocalQueue;
 
     fn deref(&self) -> &Self::Target {
-        &self.tx
+        &self.decode.queue
     }
 }
 
 impl<S> WebSocketStream<S> {
-    /// Get a reference of the sender.
+    /// Get a send for this websocket stream.
     /// `WebSocketSender` can be used to push response message to client.
     #[inline]
-    pub fn sender(&self) -> &WebSocketSender {
-        &self.tx
-    }
-
-    /// Owned version of `WebSocketStream::sender` API.
-    #[inline]
-    pub fn sender_owned(&self) -> WebSocketSender {
+    pub fn sender(&self) -> WebSocketSender {
         self.tx.clone()
     }
 }
@@ -314,7 +309,7 @@ pin_project_lite::pin_project! {
         #[pin]
         timer: Option<Sleep>,
         hb: HeartBeat,
-        tx: WebSocketSender,
+        queue: WebSocketLocalQueue,
         codec: Codec,
         read_buf: BytesMut,
     }
@@ -376,21 +371,10 @@ where
                             if this.hb.set(timer.as_mut()) {
                                 let _ = timer.poll(cx);
                                 if this.hb.server_send_heartbeat {
-                                    // TODO: work out this timeout error
-                                    this.tx.ping(b"ping").map_err(|e| {
-                                        ProtocolError::Io(io::Error::new(
-                                            io::ErrorKind::Other,
-                                            format!("{}", e),
-                                        ))
-                                    })?;
+                                    this.queue.ping(b"ping");
                                 }
                             } else {
-                                this.tx.close(Some(CloseCode::Normal.into())).map_err(|e| {
-                                    ProtocolError::Io(io::Error::new(
-                                        io::ErrorKind::Other,
-                                        format!("{}", e),
-                                    ))
-                                })?;
+                                this.queue.close(Some(CloseCode::Normal.into()));
                                 return Poll::Ready(None);
                             }
                         }
@@ -404,6 +388,7 @@ where
 }
 
 pub struct EncodeStream {
+    queue: WebSocketLocalQueue,
     rx: channel::Receiver<Message>,
     codec: Codec,
     write_buf: BytesMut,
@@ -414,6 +399,21 @@ impl Stream for EncodeStream {
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
+
+        {
+            let mut queue = this.queue.borrow_mut();
+
+            while let Some(msg) = queue.pop_front() {
+                if let Message::Close(_) = msg {
+                    // Close the receiver on close message.
+                    this.rx.close();
+                }
+
+                this.codec.encode(msg, &mut this.write_buf)?;
+            }
+
+            queue.register(cx);
+        }
 
         loop {
             match Pin::new(&mut this.rx).poll_recv(cx) {
@@ -511,6 +511,98 @@ impl WebSocketSender {
     #[inline]
     pub fn close(&self, reason: Option<CloseReason>) -> Result<(), Error> {
         self.send(Message::Close(reason))
+    }
+}
+
+#[derive(Clone)]
+pub struct WebSocketLocalQueue(Rc<RefCell<QueueInner>>);
+
+impl Deref for WebSocketLocalQueue {
+    type Target = RefCell<QueueInner>;
+
+    fn deref(&self) -> &Self::Target {
+        &*self.0
+    }
+}
+
+pub struct QueueInner {
+    queue: VecDeque<Message>,
+    waker: Option<Waker>,
+}
+
+impl QueueInner {
+    fn pop_front(&mut self) -> Option<Message> {
+        self.queue.pop_front()
+    }
+
+    fn push_back(&mut self, msg: Message) {
+        self.queue.push_back(msg);
+    }
+
+    fn register(&mut self, cx: &mut Context<'_>) {
+        self.waker = Some(cx.waker().clone());
+    }
+
+    fn wake(&mut self) {
+        if let Some(waker) = self.waker.take() {
+            waker.wake();
+        }
+    }
+}
+
+impl WebSocketLocalQueue {
+    fn new() -> Self {
+        let inner = QueueInner {
+            queue: VecDeque::new(),
+            waker: None,
+        };
+
+        Self(Rc::new(RefCell::new(inner)))
+    }
+
+    /// Send text frame
+    #[inline]
+    pub fn text(&self, text: impl Into<ByteString>) {
+        let mut this = self.borrow_mut();
+
+        this.push_back(Message::Text(text.into()));
+        this.wake();
+    }
+
+    /// Send binary frame
+    #[inline]
+    pub fn binary(&self, data: impl Into<Bytes>) {
+        let mut this = self.borrow_mut();
+
+        this.push_back(Message::Binary(data.into()));
+        this.wake();
+    }
+
+    /// Send ping frame
+    #[inline]
+    pub fn ping(&self, message: &[u8]) {
+        let mut this = self.borrow_mut();
+
+        this.push_back(Message::Ping(Bytes::copy_from_slice(message)));
+        this.wake();
+    }
+
+    /// Send pong frame
+    #[inline]
+    pub fn pong(&self, message: &[u8]) {
+        let mut this = self.borrow_mut();
+
+        this.push_back(Message::Pong(Bytes::copy_from_slice(message)));
+        this.wake();
+    }
+
+    /// Send close frame
+    #[inline]
+    pub fn close(&self, reason: Option<CloseReason>) {
+        let mut this = self.borrow_mut();
+
+        this.push_back(Message::Close(reason));
+        this.wake();
     }
 }
 

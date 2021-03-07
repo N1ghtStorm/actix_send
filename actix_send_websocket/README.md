@@ -17,22 +17,18 @@ async fn ws(ws: WebSocket) -> impl Responder {
     actix_web::rt::spawn(async move {
         actix_web::rt::pin!(stream);
         while let Some(Ok(msg)) = stream.next().await {
-            let result = match msg {
+            match msg {
                 // we echo text message and ping message to client.
                 Message::Text(string) => stream.text(string),
                 Message::Ping(bytes) => stream.pong(&bytes),
                 Message::Close(reason) => {
-                    let _ = stream.close(reason);
+                    stream.close(reason);
                     // force end the stream when we have a close message.
                     break;
                 }
                 // other types of message would be ignored
-                _ => Ok(()),
+                _ => {},
             };
-            if result.is_err() {
-                // end the stream when the response is gone.
-                break;
-            }
         }   
     });
 

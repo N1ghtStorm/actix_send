@@ -1,3 +1,11 @@
+## 0.3 - 2021-03-04
+## Added
+- `WebSocketStream::sender` method for a thread safe sender for sink message to ws stream.
+
+## Changed
+- `WebsocketStream::{text, ping, pong, binary, close}` methods would not fail.
+
+
 ## 0.2.1 - 2021-03-04
 ### Changed
 - `WebSocketStream` must be pinned for collect the stream. This can be done with `actix_web::rt::pin`.

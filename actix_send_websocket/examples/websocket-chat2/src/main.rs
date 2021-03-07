@@ -3,11 +3,11 @@ use std::time::Duration;
 use actix_files as fs;
 use actix_send_websocket::{CloseCode, Message, WebSocket, WebSocketSender, WsConfig};
 use actix_web::{
-    error::{Error, ErrorInternalServerError},
     get,
     web::{self, Data},
     App, HttpResponse, HttpServer, Responder,
 };
+use futures::StreamExt;
 
 use crate::server::SharedChatServer;
 
@@ -26,8 +26,6 @@ pub struct WsChatSession<'a> {
     pub room: String,
     /// peer name
     pub name: Option<String>,
-    /// a channel sender to send websocket message to client
-    pub tx: WebSocketSender,
     /// a reference of shared chat server. So session can remove the tx from server when dropped.
     pub server: &'a SharedChatServer,
 }
@@ -38,92 +36,13 @@ impl<'a> WsChatSession<'a> {
 
         // insert id and sender to chat server. It can be used to send message directly to client from
         // other threads and/or websocket connections.
-        server.get().connect(id, tx.clone());
+        server.get().connect(id, tx);
 
         Self {
             id,
             room: "Main".to_string(),
             name: None,
-            tx,
             server,
-        }
-    }
-
-    // session handle for messages.
-    async fn handle(&mut self, msg: Message) -> Result<(), Error> {
-        match msg {
-            Message::Ping(msg) => self.tx.pong(&msg),
-            Message::Pong(_) => Ok(()),
-            Message::Text(text) => {
-                let m = text.trim();
-                // we check for /sss type of messages
-                if m.starts_with('/') {
-                    let v: Vec<&str> = m.splitn(2, ' ').collect();
-                    match v[0] {
-                        "/list" => {
-                            println!("List rooms");
-                            let rooms = self.server.get().list_rooms();
-
-                            for room in rooms.into_iter() {
-                                if self.tx.text(room).is_err() {
-                                    break;
-                                }
-                            }
-
-                            Ok(())
-                        }
-                        "/join" => {
-                            let text = if v.len() == 2 {
-                                self.server.get().join(self.id, &self.room);
-                                "joined"
-                            } else {
-                                "!!! room name is required"
-                            };
-
-                            self.tx.text(text)
-                        }
-                        "/name" => {
-                            let msg = if v.len() == 2 {
-                                self.name = Some(v[1].to_owned());
-
-                                format!("new name is {}", v[1])
-                            } else {
-                                "!!! name is required".into()
-                            };
-
-                            self.tx.text(msg)
-                        }
-                        _ => self.tx.text(format!("!!! unknown command: {:?}", m)),
-                    }
-                } else {
-                    let msg = if let Some(ref name) = self.name {
-                        format!("{}: {}", name, m)
-                    } else {
-                        m.to_owned()
-                    };
-                    // send message with chat server
-                    self.server
-                        .get()
-                        .send_message(&self.room, msg.as_str(), self.id);
-
-                    Ok(())
-                }
-            }
-            Message::Binary(_) => {
-                println!("Unexpected binary");
-                Ok(())
-            }
-            Message::Close(reason) => {
-                // close could either be sent by the client or the built in heartbeat manager.
-                // so we should echo the message to client and then end the stream.
-                let _ = self.tx.close(reason);
-                Err(ErrorInternalServerError::<&str>("closed"))
-            }
-            Message::Continuation(_) => {
-                let _ = self.tx.close(None);
-                Err(ErrorInternalServerError::<&str>("closed"))
-            }
-            Message::Nop => Ok(()),
         }
     }
 }
@@ -141,20 +60,83 @@ async fn chat_route(server: Data<SharedChatServer>, websocket: WebSocket) -> imp
     // stream is the async iterator for incoming websocket messages.
     // res is the response to client.
     // tx is the sender to add message to response.
-    let (mut stream, res) = websocket.into_parts();
+    let (stream, res) = websocket.into_parts();
 
     // spawn the message handling future so we don't block our response to client.
     actix_web::rt::spawn(async move {
         // construct a session.
-        let mut session = WsChatSession::new(&*server, stream.sender().clone());
+        let mut session = WsChatSession::new(&*server, stream.sender());
+
+        actix_web::rt::pin!(stream);
 
         // iter through the incoming stream of messages.
         while let Some(res) = stream.next().await {
             let msg = res.unwrap_or_else(|_| Message::Close(Some(CloseCode::Protocol.into())));
 
-            if session.handle(msg).await.is_err() {
-                // send is failed because client response is gone so we should end the stream.
-                break;
+            match msg {
+                Message::Ping(msg) => stream.pong(&msg),
+                Message::Text(text) => {
+                    let m = text.trim();
+                    // we check for /sss type of messages
+                    if m.starts_with('/') {
+                        let v: Vec<&str> = m.splitn(2, ' ').collect();
+                        match v[0] {
+                            "/list" => {
+                                println!("List rooms");
+                                let rooms = session.server.get().list_rooms();
+
+                                for room in rooms.into_iter() {
+                                    stream.text(room);
+                                }
+                            }
+                            "/join" => {
+                                let text = if v.len() == 2 {
+                                    session.server.get().join(session.id, &session.room);
+                                    "joined"
+                                } else {
+                                    "!!! room name is required"
+                                };
+
+                                stream.text(text)
+                            }
+                            "/name" => {
+                                let msg = if v.len() == 2 {
+                                    session.name = Some(v[1].to_owned());
+
+                                    format!("new name is {}", v[1])
+                                } else {
+                                    "!!! name is required".into()
+                                };
+
+                                stream.text(msg)
+                            }
+                            _ => stream.text(format!("!!! unknown command: {:?}", m)),
+                        }
+                    } else {
+                        let msg = if let Some(ref name) = session.name {
+                            format!("{}: {}", name, m)
+                        } else {
+                            m.to_owned()
+                        };
+                        // send message with chat server
+                        session
+                            .server
+                            .get()
+                            .send_message(&session.room, msg.as_str(), session.id);
+                    }
+                }
+                Message::Binary(_) => println!("Unexpected binary"),
+                Message::Close(reason) => {
+                    // close could either be sent by the client or the built in heartbeat manager.
+                    // so we should echo the message to client and then end the stream.
+                    stream.close(reason);
+                    return;
+                }
+                Message::Continuation(_) => {
+                    stream.close(None);
+                    return;
+                }
+                Message::Nop | Message::Pong(_) => {}
             }
         }
     });

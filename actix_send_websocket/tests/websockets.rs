@@ -9,7 +9,7 @@ async fn handler(WebSocket(stream, res): WebSocket) -> impl Responder {
     actix_web::rt::spawn(async move {
         actix_web::rt::pin!(stream);
         while let Some(Ok(msg)) = stream.next().await {
-            let result = match msg {
+            match msg {
                 Message::Text(str) => stream.text(str),
                 Message::Binary(bytes) => stream.binary(bytes),
                 Message::Ping(bytes) => stream.pong(&bytes),
@@ -17,12 +17,8 @@ async fn handler(WebSocket(stream, res): WebSocket) -> impl Responder {
                     let _ = stream.close(reason);
                     break;
                 }
-                _ => Ok(()),
+                _ => return,
             };
-
-            if result.is_err() {
-                break;
-            }
         }
     });
 
