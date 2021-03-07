@@ -4,7 +4,6 @@
 //! ```rust,no_run
 //! use actix_web::{get, App, Error, HttpRequest, HttpServer, Responder};
 //! use actix_send_websocket::{Message, WebSocket};
-//! use futures_util::StreamExt;
 //!
 //! #[get("/")]
 //! async fn ws(ws: WebSocket) -> impl Responder {
@@ -75,7 +74,8 @@ use actix_web::{
     FromRequest, HttpRequest,
 };
 use bytestring::ByteString;
-use futures_core::stream::Stream;
+use futures_core::{ready, stream::Stream};
+use pin_project::{pin_project, pinned_drop};
 
 /// config for WebSockets.
 ///
@@ -208,10 +208,9 @@ impl FromRequest for WebSocket {
     }
 }
 
-pin_project_lite::pin_project! {
-    pub struct WebSocketFuture<T> {
-        res: Option<T>
-    }
+#[pin_project]
+pub struct WebSocketFuture<T> {
+    res: Option<T>,
 }
 
 impl<T> WebSocketFuture<T> {
@@ -262,17 +261,25 @@ pub fn split_stream<S>(cfg: &WsConfig, stream: S) -> (WebSocketStream<S>, Encode
     )
 }
 
-pin_project_lite::pin_project! {
-    pub struct WebSocketStream<S> {
-        #[pin]
-        decode: DecodeStream<S>,
-        tx: WebSocketSender,
+#[pin_project(PinnedDrop)]
+pub struct WebSocketStream<S> {
+    #[pin]
+    decode: DecodeStream<S>,
+    tx: WebSocketSender,
+}
+
+#[pinned_drop]
+impl<S> PinnedDrop for WebSocketStream<S> {
+    fn drop(self: Pin<&mut Self>) {
+        // Wake up encode stream to shut it down.
+        self.project().decode.queue.borrow_mut().wake();
     }
 }
 
 impl<S> Deref for WebSocketStream<S> {
     type Target = WebSocketLocalQueue;
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
         &self.decode.queue
     }
@@ -284,6 +291,52 @@ impl<S> WebSocketStream<S> {
     #[inline]
     pub fn sender(&self) -> WebSocketSender {
         self.tx.clone()
+    }
+
+    pub fn next<'s, 'p>(self: &'s mut Pin<&'p mut Self>) -> Next<'s, 'p, S> {
+        Next { stream: self }
+    }
+
+    pub fn try_next<'s, 'p>(self: &'s mut Pin<&'p mut Self>) -> TryNext<'s, 'p, S> {
+        TryNext { stream: self }
+    }
+}
+
+pub struct Next<'s, 'p, S> {
+    stream: &'s mut Pin<&'p mut WebSocketStream<S>>,
+}
+
+impl<S, E> Future for Next<'_, '_, S>
+where
+    S: Stream<Item = Result<Bytes, E>>,
+    E: Debug + Display,
+{
+    type Output = Option<Result<Message, ProtocolError>>;
+
+    #[inline]
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.get_mut().stream.as_mut().poll_next(cx)
+    }
+}
+
+pub struct TryNext<'s, 'p, S> {
+    stream: &'s mut Pin<&'p mut WebSocketStream<S>>,
+}
+
+impl<S, E> Future for TryNext<'_, '_, S>
+where
+    S: Stream<Item = Result<Bytes, E>>,
+    E: Debug + Display,
+{
+    type Output = Result<Option<Message>, ProtocolError>;
+
+    #[inline]
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match ready!(self.get_mut().stream.as_mut().poll_next(cx)) {
+            Some(Ok(msg)) => Poll::Ready(Ok(Some(msg))),
+            None => Poll::Ready(Ok(None)),
+            Some(Err(e)) => Poll::Ready(Err(e)),
+        }
     }
 }
 
@@ -302,17 +355,16 @@ where
 }
 
 // decode incoming stream.
-pin_project_lite::pin_project! {
-     struct DecodeStream<S> {
-        #[pin]
-        stream: S,
-        #[pin]
-        timer: Option<Sleep>,
-        hb: HeartBeat,
-        queue: WebSocketLocalQueue,
-        codec: Codec,
-        read_buf: BytesMut,
-    }
+#[pin_project]
+struct DecodeStream<S> {
+    #[pin]
+    stream: S,
+    #[pin]
+    timer: Option<Sleep>,
+    hb: HeartBeat,
+    queue: WebSocketLocalQueue,
+    codec: Codec,
+    read_buf: BytesMut,
 }
 
 impl<E, S> Stream for DecodeStream<S>
@@ -412,7 +464,12 @@ impl Stream for EncodeStream {
                 this.codec.encode(msg, &mut this.write_buf)?;
             }
 
-            queue.register(cx);
+            // close the receiver when decode stream is dropped.
+            if this.queue.is_closed() {
+                this.rx.close();
+            } else {
+                queue.register(cx);
+            }
         }
 
         loop {
@@ -454,7 +511,6 @@ struct HeartBeat {
 }
 
 impl HeartBeat {
-    #[inline]
     fn new(interval: Duration, timeout: Duration, server_send_heartbeat: bool) -> Self {
         Self {
             server_send_heartbeat,
@@ -520,6 +576,7 @@ pub struct WebSocketLocalQueue(Rc<RefCell<QueueInner>>);
 impl Deref for WebSocketLocalQueue {
     type Target = RefCell<QueueInner>;
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
         &*self.0
     }
@@ -531,18 +588,22 @@ pub struct QueueInner {
 }
 
 impl QueueInner {
+    #[inline]
     fn pop_front(&mut self) -> Option<Message> {
         self.queue.pop_front()
     }
 
+    #[inline]
     fn push_back(&mut self, msg: Message) {
         self.queue.push_back(msg);
     }
 
+    #[inline]
     fn register(&mut self, cx: &mut Context<'_>) {
         self.waker = Some(cx.waker().clone());
     }
 
+    #[inline]
     fn wake(&mut self) {
         if let Some(waker) = self.waker.take() {
             waker.wake();
@@ -560,11 +621,15 @@ impl WebSocketLocalQueue {
         Self(Rc::new(RefCell::new(inner)))
     }
 
+    #[inline]
+    fn is_closed(&self) -> bool {
+        Rc::strong_count(&self.0) == 1
+    }
+
     /// Send text frame
     #[inline]
     pub fn text(&self, text: impl Into<ByteString>) {
         let mut this = self.borrow_mut();
-
         this.push_back(Message::Text(text.into()));
         this.wake();
     }
@@ -573,7 +638,6 @@ impl WebSocketLocalQueue {
     #[inline]
     pub fn binary(&self, data: impl Into<Bytes>) {
         let mut this = self.borrow_mut();
-
         this.push_back(Message::Binary(data.into()));
         this.wake();
     }
@@ -582,7 +646,6 @@ impl WebSocketLocalQueue {
     #[inline]
     pub fn ping(&self, message: &[u8]) {
         let mut this = self.borrow_mut();
-
         this.push_back(Message::Ping(Bytes::copy_from_slice(message)));
         this.wake();
     }
@@ -591,7 +654,6 @@ impl WebSocketLocalQueue {
     #[inline]
     pub fn pong(&self, message: &[u8]) {
         let mut this = self.borrow_mut();
-
         this.push_back(Message::Pong(Bytes::copy_from_slice(message)));
         this.wake();
     }
@@ -600,7 +662,6 @@ impl WebSocketLocalQueue {
     #[inline]
     pub fn close(&self, reason: Option<CloseReason>) {
         let mut this = self.borrow_mut();
-
         this.push_back(Message::Close(reason));
         this.wake();
     }
@@ -610,6 +671,7 @@ impl WebSocketLocalQueue {
 ///
 /// This function returns handshake `HttpResponse`, ready to send to peer.
 /// It does not perform any IO.
+#[inline]
 pub fn handshake(req: &HttpRequest) -> Result<ResponseBuilder, HandshakeError> {
     handshake_with_protocols(req, &[])
 }

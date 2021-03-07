@@ -7,7 +7,6 @@ use actix_web::{
     web::{self, Data},
     App, HttpResponse, HttpServer, Responder,
 };
-use futures::StreamExt;
 
 use crate::server::SharedChatServer;
 
@@ -64,15 +63,18 @@ async fn chat_route(server: Data<SharedChatServer>, websocket: WebSocket) -> imp
 
     // spawn the message handling future so we don't block our response to client.
     actix_web::rt::spawn(async move {
-        // construct a session.
+        // construct a session. 
+        // session is tasks with register/deresgiter this ws connection to chat server.
+        // other interaction with chat server and other ws connection is also managed 
+        // by session struct. 
         let mut session = WsChatSession::new(&*server, stream.sender());
 
+        // pin stream for zero overhead handling.
+        // Box::pin(stream) would also work but at the cost of heap allocation.
         actix_web::rt::pin!(stream);
 
         // iter through the incoming stream of messages.
-        while let Some(res) = stream.next().await {
-            let msg = res.unwrap_or_else(|_| Message::Close(Some(CloseCode::Protocol.into())));
-
+        while let Some(Ok(res)) = stream.next().await {
             match msg {
                 Message::Ping(msg) => stream.pong(&msg),
                 Message::Text(text) => {
@@ -127,8 +129,6 @@ async fn chat_route(server: Data<SharedChatServer>, websocket: WebSocket) -> imp
                 }
                 Message::Binary(_) => println!("Unexpected binary"),
                 Message::Close(reason) => {
-                    // close could either be sent by the client or the built in heartbeat manager.
-                    // so we should echo the message to client and then end the stream.
                     stream.close(reason);
                     return;
                 }
